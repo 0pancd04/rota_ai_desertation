@@ -5,14 +5,84 @@ import logging
 from datetime import datetime, time
 
 from ..models.schemas import Employee, Patient, EmployeeType, ServiceType, VehicleType, GenderEnum, TransportModeEnum, QualificationEnum
+from ..database import DatabaseManager
 
 logger = logging.getLogger(__name__)
 
 class DataProcessor:
-    def __init__(self):
+    def __init__(self, db_manager: DatabaseManager):
+        self.db_manager = db_manager
         self.employees: List[Employee] = []
         self.patients: List[Patient] = []
         self.data_loaded = False
+        # Try to load existing data from database
+        self._load_from_database()
+    
+    def _load_from_database(self):
+        """Load existing data from database"""
+        try:
+            if self.db_manager.has_data():
+                # Load employees from database
+                db_employees = self.db_manager.get_employees()
+                self.employees = []
+                for emp_data in db_employees:
+                    try:
+                        employee = Employee(
+                            EmployeeID=emp_data['employee_id'],
+                            Name=emp_data['name'],
+                            Address=emp_data['address'],
+                            PostCode=emp_data['postcode'],
+                            Gender=GenderEnum(emp_data['gender']),
+                            Ethnicity=emp_data['ethnicity'],
+                            Religion=emp_data['religion'],
+                            TransportMode=TransportModeEnum(emp_data['transport_mode']),
+                            Qualification=QualificationEnum(emp_data['qualification']),
+                            LanguageSpoken=emp_data['language_spoken'],
+                            CertificateExpiryDate=emp_data['certificate_expiry_date'],
+                            EarliestStart=emp_data['earliest_start'],
+                            LatestEnd=emp_data['latest_end'],
+                            Shifts=emp_data['shifts'],
+                            ContactNumber=emp_data['contact_number'],
+                            Notes=emp_data.get('notes', '')
+                        )
+                        self.employees.append(employee)
+                    except Exception as e:
+                        logger.warning(f"Error loading employee {emp_data.get('employee_id', 'unknown')}: {str(e)}")
+                
+                # Load patients from database
+                db_patients = self.db_manager.get_patients()
+                self.patients = []
+                for pat_data in db_patients:
+                    try:
+                        patient = Patient(
+                            PatientID=pat_data['patient_id'],
+                            PatientName=pat_data['patient_name'],
+                            Address=pat_data['address'],
+                            PostCode=pat_data['postcode'],
+                            Gender=GenderEnum(pat_data['gender']),
+                            Ethnicity=pat_data['ethnicity'],
+                            Religion=pat_data['religion'],
+                            RequiredSupport=pat_data['required_support'],
+                            RequiredHoursOfSupport=pat_data['required_hours_of_support'],
+                            AdditionalRequirements=pat_data['additional_requirements'],
+                            Illness=pat_data['illness'],
+                            ContactNumber=pat_data['contact_number'],
+                            RequiresMedication=pat_data['requires_medication'],
+                            EmergencyContact=pat_data['emergency_contact'],
+                            EmergencyRelation=pat_data['emergency_relation'],
+                            LanguagePreference=pat_data['language_preference'],
+                            Notes=pat_data.get('notes', '')
+                        )
+                        self.patients.append(patient)
+                    except Exception as e:
+                        logger.warning(f"Error loading patient {pat_data.get('patient_id', 'unknown')}: {str(e)}")
+                
+                self.data_loaded = True
+                logger.info(f"Loaded {len(self.employees)} employees and {len(self.patients)} patients from database")
+            else:
+                logger.info("No existing data found in database")
+        except Exception as e:
+            logger.error(f"Error loading data from database: {str(e)}")
     
     async def process_excel_file(self, file_path: str) -> Dict:
         """Process Excel file containing employee and patient data"""
@@ -33,13 +103,28 @@ class DataProcessor:
             # Process patients
             self.patients = self._process_patients(patient_df)
             
+            # Store in database
+            employees_dict = [emp.dict() for emp in self.employees]
+            patients_dict = [pat.dict() for pat in self.patients]
+            
+            self.db_manager.store_employees(employees_dict)
+            self.db_manager.store_patients(patients_dict)
+            
+            # Log the upload
+            filename = Path(file_path).name
+            self.db_manager.log_data_upload(
+                filename=filename,
+                employees_count=len(self.employees),
+                patients_count=len(self.patients)
+            )
+            
             self.data_loaded = True
             
-            logger.info(f"Processed {len(self.employees)} employees and {len(self.patients)} patients")
+            logger.info(f"Processed and stored {len(self.employees)} employees and {len(self.patients)} patients")
             
             return {
-                "employees": [emp.dict() for emp in self.employees],
-                "patients": [pat.dict() for pat in self.patients]
+                "employees": employees_dict,
+                "patients": patients_dict
             }
             
         except Exception as e:

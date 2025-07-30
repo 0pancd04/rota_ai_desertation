@@ -29,7 +29,7 @@ app.add_middleware(
 
 # Initialize services
 db_manager = DatabaseManager()
-data_processor = DataProcessor()
+data_processor = DataProcessor(db_manager)
 openai_service = OpenAIService()
 travel_service = TravelService()
 rota_service = RotaService(data_processor, openai_service, db_manager, travel_service)
@@ -40,7 +40,7 @@ INPUT_FILES_DIR.mkdir(exist_ok=True)
 
 @app.get("/")
 async def root():
-    return {"message": "AI Rota System for Healthcare is running"}
+    return {"message": "AI Rota System for Healthcare is running - Development Mode Active!"}
 
 @app.get("/health")
 async def health_check():
@@ -150,6 +150,92 @@ async def get_assignments():
         return {"assignments": assignments}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error fetching assignments: {str(e)}")
+
+@app.get("/data-status")
+async def get_data_status():
+    """Get the current status of data in the system"""
+    try:
+        return {
+            "has_data": data_processor.has_data(),
+            "employees_count": len(data_processor.employees),
+            "patients_count": len(data_processor.patients),
+            "assignments_count": len(rota_service.get_current_assignments()),
+            "database_has_data": db_manager.has_data()
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error fetching data status: {str(e)}")
+
+@app.get("/database/employees")
+async def get_database_employees():
+    """Get all employees from database"""
+    try:
+        employees = db_manager.get_employees()
+        return {"employees": employees}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error fetching employees from database: {str(e)}")
+
+@app.get("/database/patients")
+async def get_database_patients():
+    """Get all patients from database"""
+    try:
+        patients = db_manager.get_patients()
+        return {"patients": patients}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error fetching patients from database: {str(e)}")
+
+@app.get("/database/assignments")
+async def get_database_assignments():
+    """Get all assignments from database"""
+    try:
+        assignments = db_manager.get_assignments()
+        return {"assignments": assignments}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error fetching assignments from database: {str(e)}")
+
+@app.get("/database/logs")
+async def get_database_logs():
+    """Get all operation logs from database"""
+    try:
+        logs = db_manager.get_logs()
+        return {"logs": logs}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error fetching logs from database: {str(e)}")
+
+@app.get("/database/uploads")
+async def get_database_uploads():
+    """Get all data upload history from database"""
+    try:
+        uploads = db_manager.get_data_uploads()
+        return {"uploads": uploads}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error fetching uploads from database: {str(e)}")
+
+@app.post("/database/clear")
+async def clear_database():
+    """Clear all data from database (for testing/reset)"""
+    try:
+        db_manager.clear_all_data()
+        # Reset in-memory data
+        data_processor.employees = []
+        data_processor.patients = []
+        data_processor.data_loaded = False
+        rota_service.clear_assignments()
+        return {"message": "All data cleared successfully"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error clearing database: {str(e)}")
+
+@app.post("/database/reload")
+async def reload_from_database():
+    """Reload data from database into memory"""
+    try:
+        data_processor._load_from_database()
+        return {
+            "message": "Data reloaded from database",
+            "employees_count": len(data_processor.employees),
+            "patients_count": len(data_processor.patients)
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error reloading from database: {str(e)}")
 
 if __name__ == "__main__":
     import uvicorn

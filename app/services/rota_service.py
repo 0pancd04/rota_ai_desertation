@@ -20,6 +20,37 @@ class RotaService:
         self.current_assignments: List[EmployeeAssignment] = []
         self.db_manager = db_manager
         self.travel_service = travel_service
+        # Load existing assignments from database
+        self._load_assignments_from_database()
+    
+    def _load_assignments_from_database(self):
+        """Load existing assignments from database"""
+        try:
+            db_assignments = self.db_manager.get_assignments()
+            self.current_assignments = []
+            for assignment_data in db_assignments:
+                try:
+                    assignment = EmployeeAssignment(
+                        employee_id=assignment_data['employee_id'],
+                        employee_name=assignment_data['employee_name'],
+                        patient_id=assignment_data['patient_id'],
+                        patient_name=assignment_data['patient_name'],
+                        service_type=ServiceType(assignment_data['service_type']),
+                        assigned_time=assignment_data['assigned_time'],
+                        estimated_duration=assignment_data.get('duration', 30),
+                        travel_time=assignment_data.get('travel_time', 15),
+                        start_time=assignment_data.get('start_time', ''),
+                        end_time=assignment_data.get('end_time', ''),
+                        priority_score=assignment_data.get('priority_score', 5.0),
+                        assignment_reason=assignment_data.get('reasoning', '')
+                    )
+                    self.current_assignments.append(assignment)
+                except Exception as e:
+                    logger.warning(f"Error loading assignment {assignment_data.get('id', 'unknown')}: {str(e)}")
+            
+            logger.info(f"Loaded {len(self.current_assignments)} assignments from database")
+        except Exception as e:
+            logger.error(f"Error loading assignments from database: {str(e)}")
     
     async def process_assignment_request(self, prompt: str) -> EmployeeAssignment:
         """
@@ -269,9 +300,14 @@ class RotaService:
     def clear_assignments(self):
         """Clear all current assignments (for testing/reset)"""
         self.current_assignments = []
+        # Clear assignments from database
+        cursor = self.db_manager.conn.cursor()
+        cursor.execute("DELETE FROM assignments")
+        self.db_manager.conn.commit()
         # Reset employee assignment counts
         for employee in self.data_processor.employees:
             employee.current_assignments = 0
+        logger.info("Cleared all assignments from memory and database")
     
     def validate_assignment_rules(self, assignment: EmployeeAssignment) -> List[str]:
         """Validate that an assignment follows all the rules"""

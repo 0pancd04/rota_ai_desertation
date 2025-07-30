@@ -1,0 +1,26 @@
+FROM node:16-alpine
+
+# Set working directory
+WORKDIR /app
+
+# Install dependencies for crypto
+RUN apk add --no-cache libc6-compat
+
+# Copy package files
+COPY package*.json ./
+
+# Install all dependencies (including dev dependencies for development)
+RUN npm ci
+
+# Copy source code
+COPY . .
+
+# Set environment variables to handle crypto issues
+ENV NODE_OPTIONS="--openssl-legacy-provider"
+ENV VITE_DISABLE_ESLINT_PLUGIN=true
+
+# Expose port
+EXPOSE 3000
+
+# Command to run the development server with hot reloading
+CMD ["npm", "run", "dev", "--", "--host", "0.0.0.0", "--port", "3000"] 
