@@ -46,51 +46,27 @@ class DataProcessor:
         
         for _, row in df.iterrows():
             try:
-                # Parse employee type from qualification
-                qualification = self._safe_str(row.get('Qualification', ''))
-                emp_type = EmployeeType.NURSE if 'nurse' in qualification.lower() else EmployeeType.CARE_WORKER
-                
-                # Parse availability times
-                start_time = self._parse_time(self._safe_str(row.get('EarliestStart', '09:00')))
-                end_time = self._parse_time(self._safe_str(row.get('LatestEnd', '17:00')))
-                
-                # Parse vehicle type
-                vehicle = self._parse_vehicle(self._safe_str(row.get('VehicleAvailable', 'none')))
-                
-                # Parse languages
-                languages = self._parse_list(self._safe_str(row.get('LanguageSpoken', '')))
-                
                 employee = Employee(
-                    employee_id=self._safe_str(row.get('EmployeeID', '')),
-                    name=self._safe_str(row.get('Name', '')),
-                    address=self._safe_str(row.get('Address', '')),
-                    vehicle_available=self._safe_str(row.get('VehicleAvailable', '')),
-                    qualification=qualification,
-                    language_spoken=self._safe_str(row.get('LanguageSpoken', '')),
-                    certificate_expiry_date=self._safe_datetime(row.get('CertificateExpiryDate')),
-                    earliest_start=self._safe_str(row.get('EarliestStart', '')),
-                    latest_end=self._safe_str(row.get('LatestEnd', '')),
-                    availability=self._safe_str(row.get('Availability', '')),
-                    contact_number=self._safe_int(row.get('ContactNumber')),
-                    notes=self._safe_str(row.get('Notes', '')),
-                    
-                    # Derived fields for compatibility
-                    employee_type=emp_type,
-                    languages=languages,
-                    availability_start=start_time,
-                    availability_end=end_time,
-                    vehicle=vehicle,
-                    max_patients_per_day=8,
-                    current_assignments=0,
-                    specializations=[]
+                    EmployeeID=self._safe_str(row.get('EmployeeID', '')),
+                    Name=self._safe_str(row.get('Name', '')),
+                    Address=self._safe_str(row.get('Address', '')),
+                    PostCode=self._safe_str(row.get('PostCode', '')),
+                    Gender=self._safe_enum(row.get('Gender', ''), GenderEnum, GenderEnum.MALE),
+                    Ethnicity=self._safe_str(row.get('Ethnicity', '')),
+                    Religion=self._safe_str(row.get('Religion', '')),
+                    TransportMode=self._safe_enum(row.get('TransportMode', ''), TransportModeEnum, TransportModeEnum.WALKING),
+                    Qualification=self._safe_enum(row.get('Qualification', ''), QualificationEnum, QualificationEnum.CARER),
+                    LanguageSpoken=self._safe_str(row.get('LanguageSpoken', '')),
+                    CertificateExpiryDate=self._safe_str(row.get('CertificateExpiryDate', '')),
+                    EarliestStart=self._safe_str(row.get('EarliestStart', '')),
+                    LatestEnd=self._safe_str(row.get('LatestEnd', '')),
+                    Shifts=self._safe_str(row.get('Shifts', '')),
+                    ContactNumber=self._safe_str(row.get('ContactNumber', '')),
+                    Notes=self._safe_str(row.get('Notes', ''))
                 )
-                
                 employees.append(employee)
-                
             except Exception as e:
-                logger.warning(f"Skipping employee row due to error: {str(e)}")
-                continue
-        
+                logger.warning(f"Skipping employee row: {str(e)}")
         return employees
     
     def _process_patients(self, df: pd.DataFrame) -> List[Patient]:
@@ -99,45 +75,28 @@ class DataProcessor:
         
         for _, row in df.iterrows():
             try:
-                # Parse required services
-                services = self._parse_services(self._safe_str(row.get('RequiredSupport', '')))
-                
-                # Parse medical conditions
-                conditions = self._parse_list(self._safe_str(row.get('Illness', '')))
-                
-                patient_name = self._safe_str(row.get('PatientName', ''))
-                address = self._safe_str(row.get('Address', ''))
-                
                 patient = Patient(
-                    patient_id=self._safe_str(row.get('PatientID', '')),
-                    patient_name=patient_name,
-                    address=address,
-                    required_support=self._safe_str(row.get('RequiredSupport', '')),
-                    required_hours_of_support=self._safe_int(row.get('RequiredHoursOfSupport')),
-                    additional_requirements=self._safe_str(row.get('AdditionalRequirements', '')),
-                    illness=self._safe_str(row.get('Illness', '')),
-                    contact_number=self._safe_int(row.get('ContactNumber')),
-                    requires_medication=self._safe_str(row.get('RequiresMedication', '')),
-                    emergency_contact=self._safe_str(row.get('EmergencyContact', '')),
-                    emergency_relation=self._safe_str(row.get('EmergencyRelation', '')),
-                    notes=self._safe_str(row.get('Notes', '')),
-                    
-                    # Derived fields for compatibility
-                    name=patient_name,
-                    location=address,
-                    preferred_language="English",
-                    medical_conditions=conditions,
-                    required_services=services,
-                    service_times={},
-                    priority_level=1
+                    PatientID=self._safe_str(row.get('PatientID', '')),
+                    PatientName=self._safe_str(row.get('PatientName', '')),
+                    Address=self._safe_str(row.get('Address', '')),
+                    PostCode=self._safe_str(row.get('PostCode', '')),
+                    Gender=self._safe_enum(row.get('Gender', ''), GenderEnum, GenderEnum.MALE),
+                    Ethnicity=self._safe_str(row.get('Ethnicity', '')),
+                    Religion=self._safe_str(row.get('Religion', '')),
+                    RequiredSupport=self._safe_str(row.get('RequiredSupport', '')),
+                    RequiredHoursOfSupport=self._safe_int(row.get('RequiredHoursOfSupport', 0)),
+                    AdditionalRequirements=self._safe_str(row.get('AdditionalRequirements', '')),
+                    Illness=self._safe_str(row.get('Illness', '')),
+                    ContactNumber=self._safe_str(row.get('ContactNumber', '')),
+                    RequiresMedication=self._safe_str(row.get('RequiresMedication', '')),
+                    EmergencyContact=self._safe_str(row.get('EmergencyContact', '')),
+                    EmergencyRelation=self._safe_str(row.get('EmergencyRelation', '')),
+                    LanguagePreference=self._safe_str(row.get('LanguagePreference', '')),
+                    Notes=self._safe_str(row.get('Notes', ''))
                 )
-                
                 patients.append(patient)
-                
             except Exception as e:
-                logger.warning(f"Skipping patient row due to error: {str(e)}")
-                continue
-        
+                logger.warning(f"Skipping patient row: {str(e)}")
         return patients
     
     def _safe_str(self, value: Any) -> str:

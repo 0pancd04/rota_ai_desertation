@@ -8,7 +8,9 @@ from pathlib import Path
 from .services.data_processor import DataProcessor
 from .services.openai_service import OpenAIService
 from .services.rota_service import RotaService
+from .services.travel_service import TravelService
 from .models.schemas import RotaRequest, RotaResponse, EmployeeAssignment
+from .database import DatabaseManager
 
 app = FastAPI(
     title="AI Rota System for Healthcare",
@@ -26,9 +28,11 @@ app.add_middleware(
 )
 
 # Initialize services
+db_manager = DatabaseManager()
 data_processor = DataProcessor()
 openai_service = OpenAIService()
-rota_service = RotaService(data_processor, openai_service)
+travel_service = TravelService()
+rota_service = RotaService(data_processor, openai_service, db_manager, travel_service)
 
 # Ensure input_files directory exists
 INPUT_FILES_DIR = Path("input_files")
@@ -97,6 +101,14 @@ async def assign_employee(request: RotaRequest):
             message=f"Error processing assignment: {str(e)}",
             assignment=None
         )
+
+@app.post("/generate-weekly-rota")
+async def generate_weekly_rota():
+    try:
+        assignments = await rota_service.generate_weekly_schedule()
+        return {"success": True, "assignments": [a.dict() for a in assignments]}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error generating weekly rota: {str(e)}")
 
 @app.get("/employees")
 async def get_employees():

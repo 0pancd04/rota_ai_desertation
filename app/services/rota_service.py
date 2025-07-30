@@ -4,18 +4,22 @@ import logging
 
 from .data_processor import DataProcessor
 from .openai_service import OpenAIService
+from .travel_service import TravelService
 from ..models.schemas import (
     EmployeeAssignment, Employee, Patient, ServiceType, 
     EmployeeType, DailySchedule
 )
+from ..database import DatabaseManager
 
 logger = logging.getLogger(__name__)
 
 class RotaService:
-    def __init__(self, data_processor: DataProcessor, openai_service: OpenAIService):
+    def __init__(self, data_processor: DataProcessor, openai_service: OpenAIService, db_manager: DatabaseManager, travel_service: TravelService):
         self.data_processor = data_processor
         self.openai_service = openai_service
         self.current_assignments: List[EmployeeAssignment] = []
+        self.db_manager = db_manager
+        self.travel_service = travel_service
     
     async def process_assignment_request(self, prompt: str) -> EmployeeAssignment:
         """
@@ -53,11 +57,16 @@ class RotaService:
             if not available_employees:
                 raise Exception("No employees available at this time")
             
-            # Step 6: Use AI to find the best assignment
+            # Calculate travel times
+            for emp in available_employees:
+                emp.travel_time_to_patient = self.travel_service.calculate_travel_time(emp.Address, patient.Address, emp.TransportMode.value.lower())
+
+            # Enhanced context with more details
             context = {
                 "preferred_time": preferred_time,
                 "urgency": urgency,
-                "current_assignments": len(self.current_assignments)
+                "current_assignments": len(self.current_assignments),
+                "requirements": "Follow all system requirements for matching"
             }
             
             ai_result = await self.openai_service.find_best_assignment(
@@ -85,11 +94,37 @@ class RotaService:
             
             logger.info(f"Assignment created: {selected_employee.name} -> {patient.name} for {service_type.value}")
             
+            # Log operation
+            self.db_manager.log_operation(
+                operation_type="assignment_request",
+                description=f"Processed assignment for patient {patient_id}",
+                details={"prompt": prompt, "service_type": service_type_str}
+            )
+
+            # After creating assignment
+            self.db_manager.log_assignment(assignment.dict())
+
             return assignment
             
         except Exception as e:
             logger.error(f"Error processing assignment request: {str(e)}")
             raise
+    
+    async def generate_weekly_schedule(self):
+        """Generate weekly schedule for all patients"""
+        self.db_manager.log_operation("weekly_schedule", "Starting weekly schedule generation")
+        assignments = []
+        for patient in self.data_processor.patients:
+            try:
+                prompt = f"Assign employee for patient {patient.PatientID} requiring {patient.RequiredSupport}"
+                assignment = await self.process_assignment_request(prompt)
+                assignments.append(assignment)
+            except Exception as e:
+                logger.error(f"Failed to assign for {patient.PatientID}: {str(e)}")
+        # Simple optimization: sort by time
+        assignments.sort(key=lambda a: a.assigned_time)
+        self.db_manager.log_operation("weekly_schedule", "Completed weekly schedule", {"assignments_count": len(assignments)})
+        return assignments
     
     def _map_service_type(self, service_str: str) -> ServiceType:
         """Map string to ServiceType enum"""

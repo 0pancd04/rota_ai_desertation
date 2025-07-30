@@ -97,27 +97,29 @@ class OpenAIService:
             employees_data = []
             for emp in qualified_employees:
                 employees_data.append({
-                    "id": emp.employee_id,
-                    "name": emp.name,
-                    "type": emp.employee_type.value,
-                    "location": emp.location,
-                    "languages": emp.languages,
-                    "vehicle": emp.vehicle.value,
-                    "current_assignments": emp.current_assignments,
-                    "max_patients": emp.max_patients_per_day,
-                    "availability_start": emp.availability_start.strftime("%H:%M"),
-                    "availability_end": emp.availability_end.strftime("%H:%M")
+                    "id": emp.EmployeeID,
+                    "name": emp.Name,
+                    "type": emp.Qualification.value,
+                    "location": emp.Address,
+                    "postcode": emp.PostCode,
+                    "languages": emp.LanguageSpoken.split(','),
+                    "transport": emp.TransportMode.value,
+                    "shifts": emp.Shifts,
+                    "earliest_start": emp.EarliestStart,
+                    "latest_end": emp.LatestEnd,
+                    "current_assignments": emp.current_assignments if hasattr(emp, 'current_assignments') else 0,
+                    "travel_time_to_patient": emp.travel_time_to_patient if hasattr(emp, 'travel_time_to_patient') else 15
                 })
             
             system_prompt = f"""
-            You are an AI assistant for a healthcare rota system. Your task is to select the best employee for a patient assignment.
+            You are an AI assistant for a healthcare rota system. Your task is to select the best employee for a patient assignment based on complex criteria.
             
-            Rules to follow:
-            1. For medicine services, only nurses are qualified (already filtered)
-            2. Prefer employees who speak the patient's preferred language
-            3. Consider travel time based on location proximity and vehicle availability
-            4. Balance workload - avoid overloading employees
-            5. Consider employee availability times
+            Key Rules and Priorities (in order):
+            1. Qualification Matching: Only qualified nurses for medication tasks. Prioritize Senior Carer > Carer for complex cases. Verify certificate validity.
+            2. Geographic Optimization: Minimize travel time based on transport mode, cluster assignments geographically, consider traffic.
+            3. Language and Cultural Matching: Prioritize language match, consider cultural/religious compatibility.
+            4. Schedule Optimization: Balance workload, respect shift constraints, ensure coverage, handle emergencies.
+            5. Other: Respect earliest start/latest end times, transport limitations.
             
             Patient Details: {json.dumps(patient_data, indent=2)}
             Service Required: {service_type.value}
@@ -125,9 +127,9 @@ class OpenAIService:
             
             Select the best employee and provide:
             1. employee_id: The selected employee's ID
-            2. reasoning: Detailed explanation of why this employee was selected
-            3. priority_score: A score from 1-10 indicating how good this match is
-            4. estimated_travel_time: Estimated travel time in minutes
+            2. reasoning: Detailed explanation including how it matches each criterion
+            3. priority_score: Score 1-10
+            4. estimated_travel_time: Estimated in minutes (use reasonable estimate based on locations)
             5. estimated_duration: Estimated service duration in minutes
             
             Return as JSON format only.

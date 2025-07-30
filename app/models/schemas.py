@@ -18,19 +18,39 @@ class VehicleType(str, Enum):
     BIKE = "bike"
     NONE = "none"
 
+class GenderEnum(str, Enum):
+    MALE = "Male"
+    FEMALE = "Female"
+    NON_BINARY = "Non-binary"
+
+class TransportModeEnum(str, Enum):
+    CAR = "Car"
+    PUBLIC_TRANSPORT = "Public Transport"
+    BICYCLE = "Bicycle"
+    WALKING = "Walking"
+
+class QualificationEnum(str, Enum):
+    SENIOR_CARER = "Senior Carer"
+    CARER = "Carer"
+    NURSE = "Nurse"
+
 class Employee(BaseModel):
-    employee_id: str = Field(..., description="Unique employee identifier")
-    name: str = Field(..., description="Employee name")
-    address: str = Field(..., description="Employee address")
-    vehicle_available: Optional[str] = Field(None, description="Vehicle availability")
-    qualification: Optional[str] = Field(None, description="Employee qualification")
-    language_spoken: Optional[str] = Field(None, description="Languages spoken by employee")
-    certificate_expiry_date: Optional[datetime] = Field(None, description="Certificate expiry date")
-    earliest_start: Optional[str] = Field(None, description="Earliest start time")
-    latest_end: Optional[str] = Field(None, description="Latest end time")
-    availability: Optional[str] = Field(None, description="Availability schedule")
-    contact_number: Optional[int] = Field(None, description="Contact number")
-    notes: Optional[str] = Field(None, description="Additional notes")
+    EmployeeID: str = Field(..., alias="EmployeeID")
+    Name: str = Field(..., alias="Name")
+    Address: str = Field(..., alias="Address")
+    PostCode: str = Field(..., alias="PostCode")
+    Gender: GenderEnum = Field(..., alias="Gender")
+    Ethnicity: str = Field(..., alias="Ethnicity")
+    Religion: str = Field(..., alias="Religion")
+    TransportMode: TransportModeEnum = Field(..., alias="TransportMode")
+    Qualification: QualificationEnum = Field(..., alias="Qualification")
+    LanguageSpoken: str = Field(..., alias="LanguageSpoken")  # Multiple languages supported
+    CertificateExpiryDate: str = Field(..., alias="CertificateExpiryDate")  # YYYY-MM-DD
+    EarliestStart: str = Field(..., alias="EarliestStart")  # HH:MM
+    LatestEnd: str = Field(..., alias="LatestEnd")  # HH:MM
+    Shifts: str = Field(..., alias="Shifts")  # Combination of Breakfast/Lunch/Evening
+    ContactNumber: str = Field(..., alias="ContactNumber")
+    Notes: Optional[str] = Field(None, alias="Notes")
     
     # Derived fields for compatibility
     employee_type: EmployeeType = Field(default=EmployeeType.CARE_WORKER, description="Type of employee")
@@ -43,18 +63,23 @@ class Employee(BaseModel):
     specializations: List[str] = Field(default=[], description="Employee specializations")
 
 class Patient(BaseModel):
-    patient_id: str = Field(..., description="Unique patient identifier")
-    patient_name: str = Field(..., description="Patient name")
-    address: str = Field(..., description="Patient address")
-    required_support: Optional[str] = Field(None, description="Required support services")
-    required_hours_of_support: Optional[int] = Field(None, description="Required hours of support")
-    additional_requirements: Optional[str] = Field(None, description="Additional requirements")
-    illness: Optional[str] = Field(None, description="Patient illness/condition")
-    contact_number: Optional[int] = Field(None, description="Contact number")
-    requires_medication: Optional[str] = Field(None, description="Medication requirements")
-    emergency_contact: Optional[str] = Field(None, description="Emergency contact")
-    emergency_relation: Optional[str] = Field(None, description="Emergency contact relation")
-    notes: Optional[str] = Field(None, description="Additional notes")
+    PatientID: str = Field(..., alias="PatientID")
+    PatientName: str = Field(..., alias="PatientName")
+    Address: str = Field(..., alias="Address")
+    PostCode: str = Field(..., alias="PostCode")
+    Gender: GenderEnum = Field(..., alias="Gender")
+    Ethnicity: str = Field(..., alias="Ethnicity")
+    Religion: str = Field(..., alias="Religion")
+    RequiredSupport: str = Field(..., alias="RequiredSupport")  # Comma-separated services
+    RequiredHoursOfSupport: int = Field(..., alias="RequiredHoursOfSupport")
+    AdditionalRequirements: str = Field(..., alias="AdditionalRequirements")
+    Illness: str = Field(..., alias="Illness")
+    ContactNumber: str = Field(..., alias="ContactNumber")
+    RequiresMedication: str = Field(..., alias="RequiresMedication")  # Y/N
+    EmergencyContact: str = Field(..., alias="EmergencyContact")
+    EmergencyRelation: str = Field(..., alias="EmergencyRelation")
+    LanguagePreference: str = Field(..., alias="LanguagePreference")
+    Notes: Optional[str] = Field(None, alias="Notes")
     
     # Derived fields for compatibility
     name: str = Field(..., description="Patient name (alias for patient_name)")
