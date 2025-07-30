@@ -14,8 +14,7 @@ import {
   ClipboardDocumentListIcon,
   PlusCircleIcon,
   Bars3Icon,
-  XMarkIcon,
-  SignalIcon
+  XMarkIcon
 } from '@heroicons/react/24/outline';
 
 function App() {
@@ -24,12 +23,42 @@ function App() {
   const navigate = useNavigate();
 
   const navigation = [
-    { name: 'Dashboard', href: '/', icon: HomeIcon, current: location.pathname === '/' },
-    { name: 'Upload Data', href: '/upload', icon: CloudArrowUpIcon, current: location.pathname === '/upload' },
-    { name: 'Employees', href: '/employees', icon: UserGroupIcon, current: location.pathname === '/employees' },
-    { name: 'Patients', href: '/patients', icon: UserIcon, current: location.pathname === '/patients' },
-    { name: 'Assignments', href: '/assignments', icon: ClipboardDocumentListIcon, current: location.pathname === '/assignments' },
-    { name: 'Create Assignment', href: '/create-assignment', icon: PlusCircleIcon, current: location.pathname === '/create-assignment' },
+    { 
+      name: 'Dashboard', 
+      href: '/', 
+      icon: HomeIcon,
+      current: location.pathname === '/'
+    },
+    { 
+      name: 'Upload Data', 
+      href: '/upload', 
+      icon: CloudArrowUpIcon,
+      current: location.pathname === '/upload'
+    },
+    { 
+      name: 'Employees', 
+      href: '/employees', 
+      icon: UserGroupIcon,
+      current: location.pathname === '/employees'
+    },
+    { 
+      name: 'Patients', 
+      href: '/patients', 
+      icon: UserIcon,
+      current: location.pathname === '/patients'
+    },
+    { 
+      name: 'Assignments', 
+      href: '/assignments', 
+      icon: ClipboardDocumentListIcon,
+      current: location.pathname === '/assignments'
+    },
+    { 
+      name: 'Create Assignment', 
+      href: '/create-assignment', 
+      icon: PlusCircleIcon,
+      current: location.pathname === '/create-assignment'
+    },
   ];
 
   const handleNavigation = (href) => {
@@ -38,57 +67,57 @@ function App() {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-100">
-      {/* Mobile sidebar */}
-      <div className={`fixed inset-0 z-50 lg:hidden ${sidebarOpen ? 'block' : 'hidden'}`}>
-        <div className="fixed inset-0 bg-gray-600 bg-opacity-75 transition-opacity" onClick={() => setSidebarOpen(false)} />
-        <div className="fixed inset-y-0 left-0 flex w-64 flex-col bg-white/95 backdrop-blur-sm shadow-2xl transform transition-transform duration-300 ease-in-out">
-          <div className="flex h-16 items-center justify-between px-6 border-b border-gray-200">
-            <div className="flex items-center">
-              <div className="h-8 w-8 bg-gradient-to-r from-blue-600 to-indigo-600 rounded-lg flex items-center justify-center shadow-lg">
-                <HomeIcon className="h-5 w-5 text-white" />
+    <div className="min-h-screen bg-gray-50">
+      {/* Mobile sidebar overlay */}
+      {sidebarOpen && (
+        <div className="fixed inset-0 z-50 lg:hidden">
+          <div className="fixed inset-0 bg-gray-900/50" onClick={() => setSidebarOpen(false)} />
+          <div className="fixed inset-y-0 left-0 flex w-64 flex-col bg-white shadow-xl">
+            <div className="flex h-16 items-center justify-between px-6 border-b border-gray-200">
+              <div className="flex items-center space-x-3">
+                <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center flex-shrink-0">
+                  <span className="text-white font-bold text-sm">HR</span>
+                </div>
+                <span className="text-lg font-semibold text-gray-900">Healthcare Rota</span>
               </div>
-              <h1 className="ml-3 text-xl font-bold bg-gradient-to-r from-blue-600 to-indigo-600 bg-clip-text text-transparent">Healthcare Rota</h1>
-            </div>
-            <button
-              onClick={() => setSidebarOpen(false)}
-              className="text-gray-400 hover:text-gray-600 transition-colors duration-200 p-1 rounded-lg hover:bg-gray-100"
-              aria-label="Close sidebar"
-            >
-              <XMarkIcon className="h-6 w-6" />
-            </button>
-          </div>
-          <nav className="flex-1 space-y-1 px-4 py-4">
-            {navigation.map((item) => (
               <button
-                key={item.name}
-                onClick={() => handleNavigation(item.href)}
-                className={`group flex items-center px-3 py-3 text-sm font-medium rounded-xl transition-all duration-200 ${
-                  item.current
-                    ? 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-lg'
-                    : 'text-gray-700 hover:bg-gray-100 hover:text-gray-900'
-                }`}
-                aria-current={item.current ? 'page' : undefined}
+                onClick={() => setSidebarOpen(false)}
+                className="text-gray-400 hover:text-gray-600 w-6 h-6 flex-shrink-0"
               >
-                <item.icon className={`mr-3 h-5 w-5 flex-shrink-0 ${
-                  item.current ? 'text-white' : 'text-gray-400 group-hover:text-gray-500'
-                }`} />
-                {item.name}
+                <XMarkIcon className="w-6 h-6" />
               </button>
-            ))}
-          </nav>
+            </div>
+            <nav className="flex-1 space-y-1 px-4 py-4">
+              {navigation.map((item) => (
+                <button
+                  key={item.name}
+                  onClick={() => handleNavigation(item.href)}
+                  className={`group flex items-center w-full px-3 py-2 text-sm font-medium rounded-lg transition-colors ${
+                    item.current
+                      ? 'bg-blue-50 text-blue-700'
+                      : 'text-gray-700 hover:bg-gray-50 hover:text-gray-900'
+                  }`}
+                >
+                  <item.icon className={`w-5 h-5 mr-3 flex-shrink-0 ${
+                    item.current ? 'text-blue-600' : 'text-gray-400 group-hover:text-gray-500'
+                  }`} />
+                  {item.name}
+                </button>
+              ))}
+            </nav>
+          </div>
         </div>
-      </div>
+      )}
 
       {/* Desktop sidebar */}
       <div className="hidden lg:fixed lg:inset-y-0 lg:flex lg:w-64 lg:flex-col">
-        <div className="flex flex-col flex-grow bg-white/95 backdrop-blur-sm shadow-2xl border-r border-gray-200">
+        <div className="flex flex-col flex-grow bg-white shadow-sm border-r border-gray-200">
           <div className="flex h-16 items-center px-6 border-b border-gray-200">
-            <div className="flex items-center">
-              <div className="h-8 w-8 bg-gradient-to-r from-blue-600 to-indigo-600 rounded-lg flex items-center justify-center shadow-lg">
-                <HomeIcon className="h-5 w-5 text-white" />
+            <div className="flex items-center space-x-3">
+              <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center flex-shrink-0">
+                <span className="text-white font-bold text-sm">HR</span>
               </div>
-              <h1 className="ml-3 text-xl font-bold bg-gradient-to-r from-blue-600 to-indigo-600 bg-clip-text text-transparent">Healthcare Rota</h1>
+              <span className="text-lg font-semibold text-gray-900">Healthcare Rota</span>
             </div>
           </div>
           <nav className="flex-1 space-y-1 px-4 py-4">
@@ -96,15 +125,14 @@ function App() {
               <button
                 key={item.name}
                 onClick={() => handleNavigation(item.href)}
-                className={`group flex items-center px-3 py-3 text-sm font-medium rounded-xl transition-all duration-200 ${
+                className={`group flex items-center w-full px-3 py-2 text-sm font-medium rounded-lg transition-colors ${
                   item.current
-                    ? 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-lg'
-                    : 'text-gray-700 hover:bg-gray-100 hover:text-gray-900'
+                    ? 'bg-blue-50 text-blue-700'
+                    : 'text-gray-700 hover:bg-gray-50 hover:text-gray-900'
                 }`}
-                aria-current={item.current ? 'page' : undefined}
               >
-                <item.icon className={`mr-3 h-5 w-5 flex-shrink-0 ${
-                  item.current ? 'text-white' : 'text-gray-400 group-hover:text-gray-500'
+                <item.icon className={`w-5 h-5 mr-3 flex-shrink-0 ${
+                  item.current ? 'text-blue-600' : 'text-gray-400 group-hover:text-gray-500'
                 }`} />
                 {item.name}
               </button>
@@ -116,32 +144,23 @@ function App() {
       {/* Main content */}
       <div className="lg:pl-64">
         {/* Top bar */}
-        <div className="sticky top-0 z-40 bg-white/80 backdrop-blur-sm border-b border-gray-200 shadow-sm">
+        <div className="sticky top-0 z-40 bg-white shadow-sm border-b border-gray-200">
           <div className="flex h-16 items-center justify-between px-4 sm:px-6 lg:px-8">
-            <div className="flex items-center">
+            <div className="flex items-center space-x-4">
               <button
                 onClick={() => setSidebarOpen(true)}
-                className="lg:hidden text-gray-500 hover:text-gray-700 transition-colors duration-200 p-2 rounded-lg hover:bg-gray-100"
-                aria-label="Open sidebar"
+                className="lg:hidden text-gray-500 hover:text-gray-700 w-6 h-6 flex-shrink-0"
               >
-                <Bars3Icon className="h-6 w-6" />
+                <Bars3Icon className="w-6 h-6" />
               </button>
-              <div className="hidden sm:block ml-4">
-                <h2 className="text-lg font-semibold text-gray-900">
-                  {navigation.find(item => item.href === location.pathname)?.name || 'Dashboard'}
-                </h2>
-                <p className="text-sm text-gray-500">Healthcare Rota Management</p>
-              </div>
+              <h1 className="text-xl font-semibold text-gray-900">
+                {navigation.find(item => item.href === location.pathname)?.name || 'Dashboard'}
+              </h1>
             </div>
-            <div className="flex items-center space-x-4">
-              <div className="flex items-center space-x-2 bg-green-50 px-3 py-2 rounded-full border border-green-200 shadow-sm">
-                <div className="h-2 w-2 bg-green-400 rounded-full status-pulse"></div>
-                <span className="text-sm text-green-700 font-medium">System Online</span>
-              </div>
-              <div className="hidden sm:flex items-center space-x-2 text-sm text-gray-500">
-                <SignalIcon className="h-4 w-4" />
-                <span>AI-Powered</span>
-              </div>
+            
+            <div className="flex items-center space-x-2 bg-green-50 px-3 py-1 rounded-full">
+              <div className="w-2 h-2 bg-green-400 rounded-full flex-shrink-0"></div>
+              <span className="text-sm text-green-700 font-medium">Online</span>
             </div>
           </div>
         </div>
@@ -149,16 +168,14 @@ function App() {
         {/* Page content */}
         <main className="py-8">
           <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
-            <div className="bg-white/70 backdrop-blur-sm rounded-2xl shadow-xl border border-white/20 p-6">
-              <Routes>
-                <Route path="/" element={<Dashboard />} />
-                <Route path="/upload" element={<DataUpload />} />
-                <Route path="/employees" element={<Employees />} />
-                <Route path="/patients" element={<Patients />} />
-                <Route path="/assignments" element={<Assignments />} />
-                <Route path="/create-assignment" element={<CreateAssignment />} />
-              </Routes>
-            </div>
+            <Routes>
+              <Route path="/" element={<Dashboard />} />
+              <Route path="/upload" element={<DataUpload />} />
+              <Route path="/employees" element={<Employees />} />
+              <Route path="/patients" element={<Patients />} />
+              <Route path="/assignments" element={<Assignments />} />
+              <Route path="/create-assignment" element={<CreateAssignment />} />
+            </Routes>
           </div>
         </main>
       </div>

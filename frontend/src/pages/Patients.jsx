@@ -40,34 +40,37 @@ function Patients() {
       name: 'Total Patients',
       value: patients.length,
       icon: UserIcon,
-      color: 'from-blue-500 to-blue-600'
+      color: 'text-blue-600',
+      bgColor: 'bg-blue-50'
     },
     {
       name: 'Requiring Medication',
       value: patients.filter(p => p.RequiresMedication === 'Y').length,
       icon: BeakerIcon,
-      color: 'from-red-500 to-red-600'
+      color: 'text-red-600',
+      bgColor: 'bg-red-50'
     },
     {
       name: 'Total Hours Needed',
       value: patients.reduce((sum, p) => sum + (p.RequiredHoursOfSupport || 0), 0),
       icon: ClockIcon,
-      color: 'from-green-500 to-green-600'
+      color: 'text-green-600',
+      bgColor: 'bg-green-50'
     }
   ];
 
   const getMedicationColor = (requiresMedication) => {
     return requiresMedication === 'Y' 
-      ? 'bg-red-100 text-red-800 border-red-200' 
-      : 'bg-green-100 text-green-800 border-green-200';
+      ? 'bg-red-100 text-red-800' 
+      : 'bg-green-100 text-green-800';
   };
 
   return (
-    <div className="space-y-8 fade-in">
+    <div className="space-y-8">
       {/* Header */}
-      <div className="text-center slide-up">
-        <div className="inline-flex items-center justify-center w-16 h-16 bg-gradient-to-r from-green-600 to-emerald-600 rounded-full mb-4 hover-lift">
-          <UserIcon className="h-8 w-8 text-white" />
+      <div className="text-center">
+        <div className="inline-flex items-center justify-center w-16 h-16 bg-green-100 rounded-full mb-4">
+          <UserIcon className="h-8 w-8 text-green-600" />
         </div>
         <h1 className="text-3xl font-bold text-gray-900 mb-2">Patient Management</h1>
         <p className="text-lg text-gray-600">View and manage patient care requirements</p>
@@ -75,23 +78,19 @@ function Patients() {
 
       {/* Stats Grid */}
       <div className="grid grid-cols-1 gap-6 sm:grid-cols-3">
-        {stats.map((stat, index) => (
-          <div 
-            key={stat.name} 
-            className="bg-white rounded-2xl shadow-lg border border-gray-100 p-6 card-hover"
-            style={{ animationDelay: `${index * 100}ms` }}
-          >
+        {stats.map((stat) => (
+          <div key={stat.name} className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
             <div className="flex items-center">
-              <div className={`flex-shrink-0 w-12 h-12 bg-gradient-to-r ${stat.color} rounded-xl flex items-center justify-center shadow-lg hover-lift`}>
-                <stat.icon className="h-6 w-6 text-white" aria-hidden="true" />
+              <div className={`flex-shrink-0 w-12 h-12 ${stat.bgColor} rounded-lg flex items-center justify-center`}>
+                <stat.icon className={`h-6 w-6 ${stat.color}`} />
               </div>
               <div className="ml-4 flex-1">
                 <p className="text-sm font-medium text-gray-500 truncate">
                   {stat.name}
                 </p>
-                <p className="text-2xl font-bold text-gray-900">
+                <p className="text-2xl font-semibold text-gray-900">
                   {loading ? (
-                    <div className="shimmer h-8 w-16 rounded"></div>
+                    <div className="h-8 w-16 bg-gray-200 rounded animate-pulse"></div>
                   ) : (
                     stat.value
                   )}
@@ -103,26 +102,26 @@ function Patients() {
       </div>
 
       {/* Search and Filter */}
-      <div className="bg-white rounded-2xl shadow-lg border border-gray-100 p-6 card-hover">
+      <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <div className="relative">
-            <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
+            <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
               <MagnifyingGlassIcon className="h-5 w-5 text-gray-400" />
             </div>
             <input
               type="text"
-              className="block w-full pl-12 pr-4 py-3 border border-gray-300 rounded-xl leading-5 bg-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-green-500 transition-all duration-200 focus-ring"
+              className="block w-full pl-10 pr-3 py-2 border border-gray-300 rounded-lg leading-5 bg-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-green-500"
               placeholder="Search patients..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
             />
           </div>
           <div className="relative">
-            <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
+            <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
               <FunnelIcon className="h-5 w-5 text-gray-400" />
             </div>
             <select
-              className="block w-full pl-12 pr-4 py-3 border border-gray-300 rounded-xl leading-5 bg-white focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-green-500 transition-all duration-200 focus-ring"
+              className="block w-full pl-10 pr-3 py-2 border border-gray-300 rounded-lg leading-5 bg-white focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-green-500"
               value={filterMedication}
               onChange={(e) => setFilterMedication(e.target.value)}
             >
@@ -135,10 +134,10 @@ function Patients() {
       </div>
 
       {/* Patients Table */}
-      <div className="bg-white rounded-2xl shadow-lg border border-gray-100 overflow-hidden card-hover">
+      <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
         {loading ? (
           <div className="p-12 text-center">
-            <div className="loading-spinner h-12 w-12 mx-auto mb-4"></div>
+            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-green-600 mx-auto mb-4"></div>
             <p className="text-gray-500">Loading patients...</p>
           </div>
         ) : filteredPatients.length === 0 ? (
@@ -148,46 +147,42 @@ function Patients() {
             <p className="text-gray-400 text-sm mt-1">Try adjusting your search or filters</p>
           </div>
         ) : (
-          <div className="overflow-x-auto smooth-scroll">
+          <div className="overflow-x-auto">
             <table className="min-w-full divide-y divide-gray-200">
               <thead className="bg-gray-50">
                 <tr>
-                  <th className="px-6 py-4 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                     Patient
                   </th>
-                  <th className="px-6 py-4 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                     Required Support
                   </th>
-                  <th className="px-6 py-4 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                     Hours Needed
                   </th>
-                  <th className="px-6 py-4 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                     Medication
                   </th>
-                  <th className="px-6 py-4 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                     Language
                   </th>
-                  <th className="px-6 py-4 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                     Emergency Contact
                   </th>
                 </tr>
               </thead>
-              <tbody className="bg-white divide-y divide-gray-100">
-                {filteredPatients.map((patient, index) => (
-                  <tr 
-                    key={patient.PatientID} 
-                    className="hover:bg-gray-50 transition-colors duration-200 slide-up"
-                    style={{ animationDelay: `${index * 50}ms` }}
-                  >
+              <tbody className="bg-white divide-y divide-gray-200">
+                {filteredPatients.map((patient) => (
+                  <tr key={patient.PatientID} className="hover:bg-gray-50">
                     <td className="px-6 py-4 whitespace-nowrap">
                       <div className="flex items-center">
-                        <div className="w-10 h-10 bg-gradient-to-r from-green-500 to-emerald-500 rounded-full flex items-center justify-center hover-lift">
-                          <span className="text-sm font-semibold text-white">
+                        <div className="w-10 h-10 bg-green-100 rounded-full flex items-center justify-center">
+                          <span className="text-sm font-medium text-green-600">
                             {patient.PatientName?.charAt(0)}
                           </span>
                         </div>
                         <div className="ml-4">
-                          <div className="text-sm font-semibold text-gray-900">
+                          <div className="text-sm font-medium text-gray-900">
                             {patient.PatientName}
                           </div>
                           <div className="text-sm text-gray-500">
@@ -211,7 +206,7 @@ function Patients() {
                       </div>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
-                      <span className={`px-3 py-1 inline-flex text-xs leading-5 font-semibold rounded-full border ${getMedicationColor(patient.RequiresMedication)}`}>
+                      <span className={`px-2 py-1 inline-flex text-xs leading-5 font-semibold rounded-full ${getMedicationColor(patient.RequiresMedication)}`}>
                         <BeakerIcon className="h-3 w-3 mr-1" />
                         {patient.RequiresMedication === 'Y' ? 'Yes' : 'No'}
                       </span>
@@ -238,7 +233,7 @@ function Patients() {
 
       {/* Results Summary */}
       {filteredPatients.length > 0 && (
-        <div className="bg-gradient-to-r from-green-50 to-emerald-50 rounded-2xl p-6 border border-green-100 card-hover">
+        <div className="bg-green-50 rounded-lg p-4 border border-green-200">
           <div className="flex items-center justify-between">
             <div className="flex items-center">
               <UserIcon className="h-5 w-5 text-green-600 mr-2" />
@@ -256,24 +251,20 @@ function Patients() {
 
       {/* High Priority Patients */}
       {patients.filter(p => p.RequiresMedication === 'Y').length > 0 && (
-        <div className="bg-gradient-to-r from-red-50 to-pink-50 rounded-2xl p-6 border border-red-100 card-hover">
+        <div className="bg-red-50 rounded-lg p-6 border border-red-200">
           <div className="flex items-center mb-4">
             <ExclamationTriangleIcon className="h-5 w-5 text-red-600 mr-2" />
-            <h3 className="text-lg font-semibold text-gray-900">High Priority Patients</h3>
+            <h3 className="text-lg font-medium text-gray-900">High Priority Patients</h3>
           </div>
-          <p className="text-sm text-gray-600 mb-3">
+          <p className="text-sm text-gray-600 mb-4">
             {patients.filter(p => p.RequiresMedication === 'Y').length} patients require medication and need nurse assignments.
           </p>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-            {patients.filter(p => p.RequiresMedication === 'Y').slice(0, 6).map((patient, index) => (
-              <div 
-                key={patient.PatientID} 
-                className="bg-white rounded-lg p-3 border border-red-200 hover-lift"
-                style={{ animationDelay: `${index * 100}ms` }}
-              >
+            {patients.filter(p => p.RequiresMedication === 'Y').slice(0, 6).map((patient) => (
+              <div key={patient.PatientID} className="bg-white rounded-lg p-3 border border-red-200">
                 <div className="flex items-center">
-                  <div className="w-8 h-8 bg-red-500 rounded-full flex items-center justify-center hover-lift">
-                    <span className="text-xs font-semibold text-white">
+                  <div className="w-8 h-8 bg-red-100 rounded-full flex items-center justify-center">
+                    <span className="text-xs font-medium text-red-600">
                       {patient.PatientName?.charAt(0)}
                     </span>
                   </div>
