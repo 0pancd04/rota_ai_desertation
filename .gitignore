@@ -1,2 +1,4 @@
 .env
 .venv
+*.db
+rota_operations.db

@@ -12,6 +12,18 @@ class TravelService:
             logger.warning("Google Maps API key not set. Using default estimates.")
         self.client = googlemaps.Client(key=api_key) if api_key else None
 
+    def _map_transport_mode(self, transport_mode: str) -> str:
+        """Map transport mode to Google Maps API mode"""
+        mode_mapping = {
+            "car": "driving",
+            "walking": "walking",
+            "bicycle": "bicycling",
+            "public transport": "transit",
+            "public_transport": "transit",
+            "bike": "bicycling"
+        }
+        return mode_mapping.get(transport_mode.lower(), "driving")
+
     def calculate_travel_time(self, origin: str, destination: str, mode: str = "driving") -> int:
         """Calculate travel time in minutes"""
         if not self.client:
@@ -19,8 +31,11 @@ class TravelService:
             return 15
         
         try:
+            # Map the transport mode to Google Maps API mode
+            api_mode = self._map_transport_mode(mode)
+            
             now = datetime.now()
-            directions = self.client.directions(origin, destination, mode=mode, departure_time=now)
+            directions = self.client.directions(origin, destination, mode=api_mode, departure_time=now)
             if directions and directions[0]['legs']:
                 duration = directions[0]['legs'][0]['duration']['value']  # in seconds
                 return int(duration / 60)

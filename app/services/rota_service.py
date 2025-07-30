@@ -7,7 +7,7 @@ from .openai_service import OpenAIService
 from .travel_service import TravelService
 from ..models.schemas import (
     EmployeeAssignment, Employee, Patient, ServiceType, 
-    EmployeeType, DailySchedule
+    EmployeeType, DailySchedule, QualificationEnum
 )
 from ..database import DatabaseManager
 
@@ -58,15 +58,18 @@ class RotaService:
                 raise Exception("No employees available at this time")
             
             # Calculate travel times
+            employee_travel_times = {}
             for emp in available_employees:
-                emp.travel_time_to_patient = self.travel_service.calculate_travel_time(emp.Address, patient.Address, emp.TransportMode.value.lower())
+                travel_time = self.travel_service.calculate_travel_time(emp.Address, patient.Address, emp.TransportMode.value.lower())
+                employee_travel_times[emp.EmployeeID] = travel_time
 
             # Enhanced context with more details
             context = {
                 "preferred_time": preferred_time,
                 "urgency": urgency,
                 "current_assignments": len(self.current_assignments),
-                "requirements": "Follow all system requirements for matching"
+                "requirements": "Follow all system requirements for matching",
+                "employee_travel_times": employee_travel_times
             }
             
             ai_result = await self.openai_service.find_best_assignment(
@@ -92,7 +95,7 @@ class RotaService:
             # Step 9: Update employee's current assignment count
             selected_employee.current_assignments += 1
             
-            logger.info(f"Assignment created: {selected_employee.name} -> {patient.name} for {service_type.value}")
+            logger.info(f"Assignment created: {selected_employee.Name} -> {patient.PatientName} for {service_type.value}")
             
             # Log operation
             self.db_manager.log_operation(
@@ -186,10 +189,10 @@ class RotaService:
         end_datetime = start_datetime + timedelta(minutes=service_duration)
         
         assignment = EmployeeAssignment(
-            employee_id=employee.employee_id,
-            employee_name=employee.name,
-            patient_id=patient.patient_id,
-            patient_name=patient.name,
+            employee_id=employee.EmployeeID,
+            employee_name=employee.Name,
+            patient_id=patient.PatientID,
+            patient_name=patient.PatientName,
             service_type=service_type,
             assigned_time=start_datetime.strftime("%H:%M"),
             estimated_duration=service_duration,
@@ -235,7 +238,7 @@ class RotaService:
         
         return DailySchedule(
             employee_id=employee_id,
-            employee_name=employee.name,
+            employee_name=employee.Name,
             date=date,
             assignments=employee_assignments,
             total_working_hours=total_working_hours,
@@ -283,12 +286,12 @@ class RotaService:
         
         # Rule 1: Medicine services require qualified personnel (nurses)
         if assignment.service_type == ServiceType.MEDICINE:
-            if employee.employee_type != EmployeeType.NURSE:
+            if employee.Qualification != QualificationEnum.NURSE:
                 violations.append("Medicine services require a qualified nurse")
         
         # Rule 3: Language preference check
-        if patient.preferred_language not in employee.languages and patient.preferred_language != "English":
-            violations.append(f"Employee doesn't speak patient's preferred language ({patient.preferred_language})")
+        if patient.LanguagePreference not in employee.LanguageSpoken and patient.LanguagePreference != "English":
+            violations.append(f"Employee doesn't speak patient's preferred language ({patient.LanguagePreference})")
         
         # Workload check
         if employee.current_assignments >= employee.max_patients_per_day:

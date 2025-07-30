@@ -81,14 +81,37 @@ class Patient(BaseModel):
     LanguagePreference: str = Field(..., alias="LanguagePreference")
     Notes: Optional[str] = Field(None, alias="Notes")
     
-    # Derived fields for compatibility
-    name: str = Field(..., description="Patient name (alias for patient_name)")
-    location: str = Field(..., description="Patient location (alias for address)")
-    preferred_language: str = Field(default="English", description="Patient's preferred language")
-    medical_conditions: List[str] = Field(default=[], description="Patient's medical conditions")
-    required_services: List[ServiceType] = Field(default=[], description="Required services")
-    service_times: Dict[str, str] = Field(default={}, description="Preferred times for each service")
-    priority_level: int = Field(default=1, description="Priority level (1-5, 5 being highest)")
+    # Derived fields for compatibility (computed properties)
+    @property
+    def name(self) -> str:
+        return self.PatientName
+    
+    @property
+    def location(self) -> str:
+        return self.Address
+    
+    @property
+    def preferred_language(self) -> str:
+        return self.LanguagePreference or "English"
+    
+    @property
+    def medical_conditions(self) -> List[str]:
+        return [self.Illness] if self.Illness else []
+    
+    @property
+    def required_services(self) -> List[ServiceType]:
+        # This will be computed in the data processor
+        return []
+    
+    @property
+    def service_times(self) -> Dict[str, str]:
+        # This will be computed in the data processor
+        return {}
+    
+    @property
+    def priority_level(self) -> int:
+        # Default priority level
+        return 1
 
 class EmployeeAssignment(BaseModel):
     employee_id: str

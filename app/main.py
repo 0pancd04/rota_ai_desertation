@@ -35,7 +35,7 @@ travel_service = TravelService()
 rota_service = RotaService(data_processor, openai_service, db_manager, travel_service)
 
 # Ensure input_files directory exists
-INPUT_FILES_DIR = Path("input_files")
+INPUT_FILES_DIR = Path("/app/input_files")
 INPUT_FILES_DIR.mkdir(exist_ok=True)
 
 @app.get("/")
@@ -55,10 +55,21 @@ async def upload_data(file: UploadFile = File(...)):
         
         file_path = INPUT_FILES_DIR / file.filename
         
+        # Debug logging
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info(f"Uploading file: {file.filename}")
+        logger.info(f"File path: {file_path}")
+        logger.info(f"File path exists: {file_path.exists()}")
+        logger.info(f"INPUT_FILES_DIR: {INPUT_FILES_DIR}")
+        
         # Save uploaded file
         with open(file_path, "wb") as buffer:
             content = await file.read()
             buffer.write(content)
+        
+        logger.info(f"File saved successfully")
+        logger.info(f"File exists after save: {file_path.exists()}")
         
         # Process the data
         result = await data_processor.process_excel_file(str(file_path))
@@ -70,6 +81,9 @@ async def upload_data(file: UploadFile = File(...)):
             "patients_count": len(result.get("patients", []))
         }
     except Exception as e:
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.error(f"Error in upload_data: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error processing file: {str(e)}")
 
 @app.post("/assign-employee", response_model=RotaResponse)

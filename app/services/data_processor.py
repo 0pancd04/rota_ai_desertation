@@ -4,7 +4,7 @@ from pathlib import Path
 import logging
 from datetime import datetime, time
 
-from ..models.schemas import Employee, Patient, EmployeeType, ServiceType, VehicleType
+from ..models.schemas import Employee, Patient, EmployeeType, ServiceType, VehicleType, GenderEnum, TransportModeEnum, QualificationEnum
 
 logger = logging.getLogger(__name__)
 
@@ -17,9 +17,15 @@ class DataProcessor:
     async def process_excel_file(self, file_path: str) -> Dict:
         """Process Excel file containing employee and patient data"""
         try:
+            logger.info(f"Processing Excel file: {file_path}")
+            logger.info(f"File exists: {Path(file_path).exists()}")
+            
             # Read both sheets
             employee_df = pd.read_excel(file_path, sheet_name='EmployeeDetails')
             patient_df = pd.read_excel(file_path, sheet_name='PatientDetails')
+            
+            logger.info(f"Employee data shape: {employee_df.shape}")
+            logger.info(f"Patient data shape: {patient_df.shape}")
             
             # Process employees
             self.employees = self._process_employees(employee_df)
@@ -113,6 +119,25 @@ class DataProcessor:
             return int(value)
         except (ValueError, TypeError):
             return None
+    
+    def _safe_enum(self, value: Any, enum_class, default_value):
+        """Safely convert value to enum, handling NaN and None"""
+        if pd.isna(value) or value is None:
+            return default_value
+        
+        value_str = str(value).strip()
+        
+        # Try to match the value to enum values
+        for enum_value in enum_class:
+            if value_str.lower() == enum_value.value.lower():
+                return enum_value
+        
+        # If no exact match, try partial matching
+        for enum_value in enum_class:
+            if enum_value.value.lower() in value_str.lower():
+                return enum_value
+        
+        return default_value
     
     def _safe_datetime(self, value: Any) -> Optional[datetime]:
         """Safely convert value to datetime, handling NaN and None"""
@@ -214,14 +239,14 @@ class DataProcessor:
     def get_employee_by_id(self, employee_id: str) -> Optional[Employee]:
         """Get employee by ID"""
         for emp in self.employees:
-            if emp.employee_id == employee_id:
+            if emp.EmployeeID == employee_id:
                 return emp
         return None
     
     def get_patient_by_id(self, patient_id: str) -> Optional[Patient]:
         """Get patient by ID"""
         for pat in self.patients:
-            if pat.patient_id == patient_id:
+            if pat.PatientID == patient_id:
                 return pat
         return None
     
@@ -232,7 +257,7 @@ class DataProcessor:
         for emp in self.employees:
             # Rule 1: For medicine, only nurses are qualified
             if service_type == ServiceType.MEDICINE:
-                if emp.employee_type == EmployeeType.NURSE:
+                if emp.Qualification == QualificationEnum.NURSE:
                     qualified.append(emp)
             else:
                 # Other services can be handled by both nurses and care workers

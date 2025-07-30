@@ -86,12 +86,12 @@ class OpenAIService:
         try:
             # Prepare data for AI analysis
             patient_data = {
-                "id": patient.patient_id,
-                "name": patient.name,
-                "location": patient.location,
-                "preferred_language": patient.preferred_language,
-                "medical_conditions": patient.medical_conditions,
-                "priority_level": patient.priority_level
+                "id": patient.PatientID,
+                "name": patient.PatientName,
+                "location": patient.Address,
+                "preferred_language": patient.LanguagePreference,
+                "medical_conditions": [patient.Illness] if patient.Illness else [],
+                "priority_level": 1  # Default priority level
             }
             
             employees_data = []
@@ -108,7 +108,7 @@ class OpenAIService:
                     "earliest_start": emp.EarliestStart,
                     "latest_end": emp.LatestEnd,
                     "current_assignments": emp.current_assignments if hasattr(emp, 'current_assignments') else 0,
-                    "travel_time_to_patient": emp.travel_time_to_patient if hasattr(emp, 'travel_time_to_patient') else 15
+                    "travel_time_to_patient": context.get("employee_travel_times", {}).get(emp.EmployeeID, 15)
                 })
             
             system_prompt = f"""
@@ -151,7 +151,7 @@ class OpenAIService:
             # Fallback: select first available employee
             if qualified_employees:
                 return {
-                    "employee_id": qualified_employees[0].employee_id,
+                    "employee_id": qualified_employees[0].EmployeeID,
                     "reasoning": "Automatic selection due to AI service error",
                     "priority_score": 5.0,
                     "estimated_travel_time": 15,
