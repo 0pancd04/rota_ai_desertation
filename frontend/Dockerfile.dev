@@ -1,4 +1,4 @@
-FROM node:16-alpine
+FROM node:20-alpine
 
 # Set working directory
 WORKDIR /app
@@ -9,7 +9,7 @@ RUN apk add --no-cache libc6-compat
 # Copy package files
 COPY package*.json ./
 
-# Install all dependencies (including dev dependencies for development)
+# Install all dependencies (including dev dependencies)
 RUN npm ci
 
 # Copy source code
@@ -22,5 +22,5 @@ ENV VITE_DISABLE_ESLINT_PLUGIN=true
 # Expose port
 EXPOSE 3000
 
-# Command to run the development server with hot reloading
+# Command to run in development mode
 CMD ["npm", "run", "dev", "--", "--host", "0.0.0.0", "--port", "3000"] 

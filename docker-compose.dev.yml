@@ -23,7 +23,7 @@ services:
   frontend-dev:
     build:
       context: ./frontend
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile.dev
     ports:
       - "3000:3000"
     environment:
@@ -37,7 +37,6 @@ services:
       - ./frontend/tailwind.config.js:/app/tailwind.config.js
       - ./frontend/postcss.config.js:/app/postcss.config.js
       - ./frontend/index.html:/app/index.html
-    command: ["npm", "run", "dev", "--", "--host", "0.0.0.0", "--port", "3000"]
     depends_on:
       - backend-dev
     restart: unless-stopped
