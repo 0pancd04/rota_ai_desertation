@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import useStore from '../store/useStore';
+import { useProgress } from '../contexts/ProgressContext';
 import { 
   SparklesIcon, 
   UserGroupIcon, 
@@ -12,6 +13,7 @@ import {
 
 function CreateAssignment() {
   const { createAssignment, loading, error, clearError } = useStore();
+  const { getActiveTask } = useProgress();
   const [prompt, setPrompt] = useState('');
   const [result, setResult] = useState(null);
 
@@ -95,17 +97,17 @@ function CreateAssignment() {
             <div className="flex justify-end">
               <button
                 type="submit"
-                disabled={loading || !prompt.trim()}
+                disabled={loading || !prompt.trim() || getActiveTask('create_assignment')}
                 className={`px-6 py-3 rounded-lg text-white font-medium transition-colors ${
-                  loading || !prompt.trim()
+                  loading || !prompt.trim() || getActiveTask('create_assignment')
                     ? 'bg-gray-400 cursor-not-allowed'
                     : 'bg-orange-600 hover:bg-orange-700'
                 }`}
               >
-                {loading ? (
+                {loading || getActiveTask('create_assignment') ? (
                   <div className="flex items-center">
                     <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white mr-2"></div>
-                    Processing...
+                    {getActiveTask('create_assignment') ? 'Creating Assignment...' : 'Processing...'}
                   </div>
                 ) : (
                   <div className="flex items-center">

@@ -117,6 +117,24 @@ class DatabaseManager:
             )
         ''')
         
+        # Table for notifications
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS notifications (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                notification_id TEXT UNIQUE NOT NULL,
+                type TEXT NOT NULL,
+                title TEXT NOT NULL,
+                message TEXT NOT NULL,
+                is_read BOOLEAN DEFAULT FALSE,
+                is_deleted BOOLEAN DEFAULT FALSE,
+                action_type TEXT,
+                action_data TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                read_at TIMESTAMP,
+                deleted_at TIMESTAMP
+            )
+        ''')
+        
         self.conn.commit()
 
     def store_employees(self, employees: List[Dict[str, Any]]):
@@ -246,6 +264,134 @@ class DatabaseManager:
         columns = [col[0] for col in cursor.description]
         return [dict(zip(columns, row)) for row in cursor.fetchall()]
 
+    # Notification methods
+    def create_notification(self, notification_id: str, notification_type: str, title: str, message: str, action_type: str = None, action_data: Dict = None) -> bool:
+        """Create a new notification"""
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute('''
+                INSERT INTO notifications (
+                    notification_id, type, title, message, action_type, action_data
+                ) VALUES (?, ?, ?, ?, ?, ?)
+            ''', (
+                notification_id,
+                notification_type,
+                title,
+                message,
+                action_type,
+                json.dumps(action_data) if action_data else None
+            ))
+            self.conn.commit()
+            logger.info(f"Created notification: {notification_id}")
+            return True
+        except Exception as e:
+            logger.error(f"Error creating notification: {e}")
+            return False
+
+    def get_notifications(self, include_deleted: bool = False, limit: int = 50) -> List[Dict]:
+        """Get notifications with optional filtering"""
+        cursor = self.conn.cursor()
+        
+        if include_deleted:
+            cursor.execute('''
+                SELECT * FROM notifications 
+                ORDER BY created_at DESC 
+                LIMIT ?
+            ''', (limit,))
+        else:
+            cursor.execute('''
+                SELECT * FROM notifications 
+                WHERE is_deleted = FALSE 
+                ORDER BY created_at DESC 
+                LIMIT ?
+            ''', (limit,))
+        
+        columns = [col[0] for col in cursor.description]
+        notifications = [dict(zip(columns, row)) for row in cursor.fetchall()]
+        
+        # Parse action_data JSON
+        for notification in notifications:
+            if notification.get('action_data'):
+                try:
+                    notification['action_data'] = json.loads(notification['action_data'])
+                except:
+                    notification['action_data'] = None
+        
+        return notifications
+
+    def get_unread_notifications_count(self) -> int:
+        """Get count of unread notifications"""
+        cursor = self.conn.cursor()
+        cursor.execute('''
+            SELECT COUNT(*) FROM notifications 
+            WHERE is_read = FALSE AND is_deleted = FALSE
+        ''')
+        return cursor.fetchone()[0]
+
+    def mark_notification_read(self, notification_id: str) -> bool:
+        """Mark a notification as read"""
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute('''
+                UPDATE notifications 
+                SET is_read = TRUE, read_at = CURRENT_TIMESTAMP 
+                WHERE notification_id = ?
+            ''', (notification_id,))
+            self.conn.commit()
+            logger.info(f"Marked notification as read: {notification_id}")
+            return True
+        except Exception as e:
+            logger.error(f"Error marking notification as read: {e}")
+            return False
+
+    def mark_notification_deleted(self, notification_id: str) -> bool:
+        """Mark a notification as deleted"""
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute('''
+                UPDATE notifications 
+                SET is_deleted = TRUE, deleted_at = CURRENT_TIMESTAMP 
+                WHERE notification_id = ?
+            ''', (notification_id,))
+            self.conn.commit()
+            logger.info(f"Marked notification as deleted: {notification_id}")
+            return True
+        except Exception as e:
+            logger.error(f"Error marking notification as deleted: {e}")
+            return False
+
+    def mark_all_notifications_read(self) -> bool:
+        """Mark all notifications as read"""
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute('''
+                UPDATE notifications 
+                SET is_read = TRUE, read_at = CURRENT_TIMESTAMP 
+                WHERE is_read = FALSE AND is_deleted = FALSE
+            ''')
+            self.conn.commit()
+            logger.info("Marked all notifications as read")
+            return True
+        except Exception as e:
+            logger.error(f"Error marking all notifications as read: {e}")
+            return False
+
+    def delete_all_notifications(self) -> bool:
+        """Delete all notifications"""
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute('''
+                UPDATE notifications 
+                SET is_deleted = TRUE, deleted_at = CURRENT_TIMESTAMP 
+                WHERE is_deleted = FALSE
+            ''')
+            self.conn.commit()
+            logger.info("Deleted all notifications")
+            return True
+        except Exception as e:
+            logger.error(f"Error deleting all notifications: {e}")
+            return False
+
     def has_data(self) -> bool:
         """Check if there's any data in the database"""
         cursor = self.conn.cursor()
@@ -263,6 +409,7 @@ class DatabaseManager:
         cursor.execute("DELETE FROM assignments")
         cursor.execute("DELETE FROM operations_log")
         cursor.execute("DELETE FROM data_uploads")
+        cursor.execute("DELETE FROM notifications")
         self.conn.commit()
         logger.info("Cleared all data from database")
 

@@ -1,5 +1,7 @@
 import { useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import useStore from '../store/useStore';
+import { useProgress } from '../contexts/ProgressContext';
 import { 
   UserGroupIcon, 
   UserIcon, 
@@ -14,6 +16,7 @@ import {
 } from '@heroicons/react/24/outline';
 
 function Dashboard() {
+  const navigate = useNavigate();
   const { 
     employees, 
     patients, 
@@ -21,8 +24,11 @@ function Dashboard() {
     fetchEmployees, 
     fetchPatients, 
     fetchAssignments,
-    loading 
+    loading,
+    generateWeeklyRota,
+    createAssignment
   } = useStore();
+  const { getActiveTask } = useProgress();
 
   useEffect(() => {
     fetchEmployees();
@@ -130,15 +136,44 @@ function Dashboard() {
       <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
         <h3 className="text-lg font-medium text-gray-900 mb-4">Quick Actions</h3>
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-          <button className="flex items-center justify-center px-4 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors">
-            <ClockIcon className="w-5 h-5 mr-2 flex-shrink-0" />
-            Generate Weekly Rota
+          <button 
+            onClick={async () => {
+              try {
+                await generateWeeklyRota();
+              } catch (error) {
+                console.error('Failed to generate weekly rota:', error);
+              }
+            }}
+            disabled={getActiveTask('weekly_rota')}
+            className={`flex items-center justify-center px-4 py-3 rounded-lg transition-colors ${
+              getActiveTask('weekly_rota')
+                ? 'bg-gray-400 cursor-not-allowed'
+                : 'bg-blue-600 hover:bg-blue-700 text-white'
+            }`}
+          >
+            {getActiveTask('weekly_rota') ? (
+              <>
+                <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white mr-2"></div>
+                Generating...
+              </>
+            ) : (
+              <>
+                <ClockIcon className="w-5 h-5 mr-2 flex-shrink-0" />
+                Generate Weekly Rota
+              </>
+            )}
           </button>
-          <button className="flex items-center justify-center px-4 py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors">
+          <button 
+            onClick={() => navigate('/create-assignment')}
+            className="flex items-center justify-center px-4 py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors"
+          >
             <PlusCircleIcon className="w-5 h-5 mr-2 flex-shrink-0" />
             Create Assignment
           </button>
-          <button className="flex items-center justify-center px-4 py-3 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors">
+          <button 
+            onClick={() => navigate('/upload')}
+            className="flex items-center justify-center px-4 py-3 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors"
+          >
             <CloudArrowUpIcon className="w-5 h-5 mr-2 flex-shrink-0" />
             Upload New Data
           </button>

@@ -1,11 +1,15 @@
 import { useState } from 'react';
 import { Routes, Route, useLocation, useNavigate } from 'react-router-dom';
+import { Toaster } from 'react-hot-toast';
 import Dashboard from './pages/Dashboard';
 import DataUpload from './pages/DataUpload';
 import Employees from './pages/Employees';
 import Patients from './pages/Patients';
 import Assignments from './pages/Assignments';
 import CreateAssignment from './pages/CreateAssignment';
+import { ProgressProvider, useProgress } from './contexts/ProgressContext';
+import ProgressIndicator from './components/ProgressIndicator';
+import NotificationTray from './components/NotificationTray';
 import { 
   HomeIcon, 
   CloudArrowUpIcon, 
@@ -17,10 +21,21 @@ import {
   XMarkIcon
 } from '@heroicons/react/24/outline';
 
-function App() {
+function AppContent() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const location = useLocation();
   const navigate = useNavigate();
+  const { 
+    activeTasks, 
+    notifications, 
+    unreadCount,
+    filterType,
+    setFilterType,
+    handleNotificationClick,
+    handleNotificationDelete,
+    handleMarkAllRead,
+    handleDeleteAll
+  } = useProgress();
 
   const navigation = [
     { 
@@ -158,9 +173,23 @@ function App() {
               </h1>
             </div>
             
-            <div className="flex items-center space-x-2 bg-green-50 px-3 py-1 rounded-full">
-              <div className="w-2 h-2 bg-green-400 rounded-full flex-shrink-0"></div>
-              <span className="text-sm text-green-700 font-medium">Online</span>
+            <div className="flex items-center space-x-4">
+              <div className="flex items-center space-x-2 bg-green-50 px-3 py-1 rounded-full">
+                <div className="w-2 h-2 bg-green-400 rounded-full flex-shrink-0"></div>
+                <span className="text-sm text-green-700 font-medium">Online</span>
+              </div>
+              
+              {/* Notification Tray */}
+              <NotificationTray
+                notifications={notifications}
+                unreadCount={unreadCount}
+                filterType={filterType}
+                setFilterType={setFilterType}
+                onNotificationClick={handleNotificationClick}
+                onNotificationDelete={handleNotificationDelete}
+                onMarkAllRead={handleMarkAllRead}
+                onDeleteAll={handleDeleteAll}
+              />
             </div>
           </div>
         </div>
@@ -179,7 +208,52 @@ function App() {
           </div>
         </main>
       </div>
+
+      {/* Progress Indicators */}
+      {activeTasks.map((task) => (
+        <ProgressIndicator
+          key={task.id}
+          task={task}
+          onClose={() => {
+            // Task will be automatically removed by the context
+          }}
+        />
+      ))}
+
+      {/* Toast Notifications */}
+      <Toaster
+        position="top-right"
+        toastOptions={{
+          duration: 5000,
+          style: {
+            background: '#363636',
+            color: '#fff',
+          },
+          success: {
+            duration: 5000,
+            iconTheme: {
+              primary: '#10B981',
+              secondary: '#fff',
+            },
+          },
+          error: {
+            duration: 5000,
+            iconTheme: {
+              primary: '#EF4444',
+              secondary: '#fff',
+            },
+          },
+        }}
+      />
     </div>
+  );
+}
+
+function App() {
+  return (
+    <ProgressProvider>
+      <AppContent />
+    </ProgressProvider>
   );
 }
 
