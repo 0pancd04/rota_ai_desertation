@@ -1,10 +1,13 @@
 from fastapi import FastAPI, HTTPException, UploadFile, File, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import List, Optional
 import os
 import asyncio
 import uuid
+import io
+from datetime import datetime
 from pathlib import Path
 
 from .services.data_processor import DataProcessor
@@ -13,7 +16,10 @@ from .services.rota_service import RotaService
 from .services.travel_service import TravelService
 from .services.progress_service import progress_service, ProgressType
 from .services.notification_service import NotificationService
+from .services.filter_service import FilterService
+from .services.excel_export_service import ExcelExportService
 from .models.schemas import RotaRequest, RotaResponse, EmployeeAssignment
+from .models.filter_schemas import FilterConfig, FilterGroup, FilterCondition
 from .database import DatabaseManager
 
 app = FastAPI(
@@ -38,12 +44,14 @@ openai_service = OpenAIService()
 travel_service = TravelService()
 rota_service = RotaService(data_processor, openai_service, db_manager, travel_service)
 notification_service = NotificationService(db_manager)
+filter_service = FilterService(db_manager)
+excel_export_service = ExcelExportService()
 
 # Update progress service with notification service
 progress_service.notification_service = notification_service
 
 # Ensure input_files directory exists
-INPUT_FILES_DIR = Path("/app/input_files")
+INPUT_FILES_DIR = Path("input_files")
 INPUT_FILES_DIR.mkdir(exist_ok=True)
 
 @app.get("/")
@@ -146,6 +154,69 @@ async def delete_all_notifications():
             raise HTTPException(status_code=500, detail="Failed to delete notifications")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error deleting notifications: {str(e)}")
+
+# Filter endpoints
+@app.get("/filters/suggestions/{page}")
+async def get_filter_suggestions(page: str):
+    """Get filter suggestions for a specific page"""
+    try:
+        if page == "assignments":
+            suggestions = filter_service.get_assignment_filter_suggestions()
+        elif page == "employees":
+            suggestions = filter_service.get_employee_filter_suggestions()
+        elif page == "patients":
+            suggestions = filter_service.get_patient_filter_suggestions()
+        else:
+            raise HTTPException(status_code=400, detail="Invalid page")
+        
+        return suggestions.dict()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error fetching filter suggestions: {str(e)}")
+
+@app.get("/filters/config/{page}")
+async def get_filter_config(page: str):
+    """Get saved filter configuration for a page"""
+    try:
+        config = filter_service.get_filter_config(page)
+        if config:
+            return config.dict()
+        else:
+            return {"page": page, "filters": [], "sort_by": None, "sort_order": "asc", "page_size": 50, "page_number": 1}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error fetching filter config: {str(e)}")
+
+@app.post("/filters/config/{page}")
+async def save_filter_config(page: str, config: FilterConfig):
+    """Save filter configuration for a page"""
+    try:
+        config_id = filter_service.update_filter_config(
+            page=page,
+            filters=config.filters,
+            sort_by=config.sort_by,
+            sort_order=config.sort_order,
+            page_size=config.page_size,
+            page_number=config.page_number
+        )
+        return {"config_id": config_id, "message": "Filter configuration saved"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error saving filter config: {str(e)}")
+
+@app.post("/filters/apply/{page}")
+async def apply_filters(page: str, filters: List[FilterGroup]):
+    """Apply filters to data for a specific page"""
+    try:
+        if page == "assignments":
+            filtered_data = filter_service.apply_filters_to_assignments(filters)
+        elif page == "employees":
+            filtered_data = filter_service.apply_filters_to_employees(filters)
+        elif page == "patients":
+            filtered_data = filter_service.apply_filters_to_patients(filters)
+        else:
+            raise HTTPException(status_code=400, detail="Invalid page")
+        
+        return {"data": filtered_data, "count": len(filtered_data)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error applying filters: {str(e)}")
 
 @app.post("/upload-data")
 async def upload_data(file: UploadFile = File(...)):
@@ -353,6 +424,171 @@ async def get_database_assignments():
         return {"assignments": assignments}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error fetching assignments from database: {str(e)}")
+
+@app.get("/export/assignments-excel")
+async def export_assignments_excel():
+    """Export assignments data to Excel with three sheets: assignments, patients, and employees"""
+    try:
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        # Get all data
+        assignments = db_manager.get_assignments()
+        patients = db_manager.get_patients()
+        employees = db_manager.get_employees()
+        
+        # Debug logging
+        logger.info(f"Export data counts - Assignments: {len(assignments)}, Patients: {len(patients)}, Employees: {len(employees)}")
+        logger.info(f"Assignments sample: {assignments[:2] if assignments else 'None'}")
+        logger.info(f"Patients sample: {patients[:2] if patients else 'None'}")
+        logger.info(f"Employees sample: {employees[:2] if employees else 'None'}")
+        
+        # Generate Excel file
+        excel_data = excel_export_service.export_assignments_data(assignments, patients, employees)
+        
+        # Debug logging for Excel data
+        logger.info(f"Excel data generated, size: {len(excel_data)} bytes")
+        
+        # Create filename with timestamp
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"assignments_export_{timestamp}.xlsx"
+        
+        # Return as streaming response
+        return StreamingResponse(
+            io.BytesIO(excel_data),
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f"attachment; filename={filename}"}
+        )
+        
+    except Exception as e:
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.error(f"Error exporting Excel data: {str(e)}")
+        logger.error(f"Exception type: {type(e)}")
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=f"Error exporting Excel data: {str(e)}")
+
+@app.get("/test-excel")
+async def test_excel_generation():
+    """Test endpoint to verify Excel generation works"""
+    try:
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        # Create test data
+        test_assignments = [
+            {
+                "employee_id": "EMP001",
+                "employee_name": "John Doe",
+                "patient_id": "PAT001",
+                "patient_name": "Jane Smith",
+                "service_type": "medicine",
+                "assigned_time": "2024-01-15T09:00:00",
+                "start_time": "2024-01-15T09:00:00",
+                "end_time": "2024-01-15T10:00:00",
+                "estimated_duration": 60,
+                "travel_time": 15,
+                "priority_score": 8.5,
+                "assignment_reason": "Test assignment"
+            }
+        ]
+        
+        test_patients = [
+            {
+                "PatientID": "PAT001",
+                "PatientName": "Jane Smith",
+                "Address": "123 Test St",
+                "PostCode": "TE1 1ST",
+                "Gender": "Female",
+                "Ethnicity": "White",
+                "Religion": "None",
+                "RequiredSupport": "medicine",
+                "RequiredHoursOfSupport": 2,
+                "AdditionalRequirements": "None",
+                "Illness": "Diabetes",
+                "ContactNumber": "1234567890",
+                "RequiresMedication": "Y",
+                "EmergencyContact": "John Smith",
+                "EmergencyRelation": "Spouse",
+                "LanguagePreference": "English",
+                "Notes": "Test patient"
+            }
+        ]
+        
+        test_employees = [
+            {
+                "EmployeeID": "EMP001",
+                "Name": "John Doe",
+                "Address": "456 Work St",
+                "PostCode": "WO1 1RK",
+                "Gender": "Male",
+                "Ethnicity": "White",
+                "Religion": "None",
+                "TransportMode": "Car",
+                "Qualification": "Nurse",
+                "LanguageSpoken": "English",
+                "CertificateExpiryDate": "2025-12-31",
+                "EarliestStart": "08:00",
+                "LatestEnd": "18:00",
+                "Shifts": "Day",
+                "ContactNumber": "0987654321",
+                "Notes": "Test employee"
+            }
+        ]
+        
+        logger.info("Testing Excel generation with test data...")
+        
+        # Generate Excel file
+        excel_data = excel_export_service.export_assignments_data(test_assignments, test_patients, test_employees)
+        
+        logger.info(f"Test Excel generated successfully, size: {len(excel_data)} bytes")
+        
+        # Return as streaming response
+        return StreamingResponse(
+            io.BytesIO(excel_data),
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": "attachment; filename=test_export.xlsx"}
+        )
+        
+    except Exception as e:
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.error(f"Test Excel generation failed: {str(e)}")
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=f"Test Excel generation failed: {str(e)}")
+
+@app.get("/export/debug-data")
+async def debug_export_data():
+    """Debug endpoint to check what data is available for export"""
+    try:
+        # Get all data
+        assignments = db_manager.get_assignments()
+        patients = db_manager.get_patients()
+        employees = db_manager.get_employees()
+        
+        return {
+            "data_counts": {
+                "assignments": len(assignments),
+                "patients": len(patients),
+                "employees": len(employees)
+            },
+            "assignments_sample": assignments[:2] if assignments else [],
+            "patients_sample": patients[:2] if patients else [],
+            "employees_sample": employees[:2] if employees else [],
+            "assignments_keys": list(assignments[0].keys()) if assignments else [],
+            "patients_keys": list(patients[0].keys()) if patients else [],
+            "employees_keys": list(employees[0].keys()) if employees else []
+        }
+        
+    except Exception as e:
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.error(f"Debug data fetch failed: {str(e)}")
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=f"Debug data fetch failed: {str(e)}")
 
 @app.get("/database/logs")
 async def get_database_logs():

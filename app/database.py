@@ -12,7 +12,7 @@ class DatabaseManager:
     def __init__(self, db_path: str = None):
         if db_path is None:
             # Use data directory for persistence
-            data_dir = Path("/app/data")
+            data_dir = Path("data")
             data_dir.mkdir(exist_ok=True)
             db_path = data_dir / "rota_operations.db"
         
