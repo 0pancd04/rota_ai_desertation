@@ -127,6 +127,55 @@ const useStore = create((set, get) => ({
     }
   },
 
+  // Update assignment
+  updateAssignment: async (assignmentId, updates) => {
+    set({ loading: true, error: null });
+    try {
+      const response = await axios.put(`${API_BASE_URL}/assignments/${assignmentId}`, updates);
+      
+      if (response.data.success) {
+        // Refresh assignments to get updated data
+        await get().fetchAssignments();
+        return response.data;
+      } else {
+        throw new Error(response.data.message);
+      }
+    } catch (error) {
+      set({ 
+        error: error.response?.data?.detail || error.message || 'Failed to update assignment',
+        loading: false 
+      });
+      throw error;
+    }
+  },
+
+  // Delete assignment
+  deleteAssignment: async (assignmentId) => {
+    set({ loading: true, error: null });
+    try {
+      const response = await axios.delete(`${API_BASE_URL}/assignments/${assignmentId}`);
+      
+      if (response.data.success) {
+        // Remove assignment from state
+        set(state => ({
+          assignments: state.assignments.filter(assignment => 
+            assignment.id !== assignmentId
+          ),
+          loading: false
+        }));
+        return response.data;
+      } else {
+        throw new Error(response.data.message);
+      }
+    } catch (error) {
+      set({ 
+        error: error.response?.data?.detail || error.message || 'Failed to delete assignment',
+        loading: false 
+      });
+      throw error;
+    }
+  },
+
   // Generate weekly rota with progress tracking
   generateWeeklyRota: async () => {
     set({ loading: true, error: null });

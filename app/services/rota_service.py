@@ -237,8 +237,109 @@ class RotaService:
         return assignment
     
     def get_current_assignments(self) -> List[Dict]:
-        """Get all current assignments"""
-        return [assignment.dict() for assignment in self.current_assignments]
+        """Get all current assignments with database IDs"""
+        # Get fresh data from database to ensure we have IDs
+        db_assignments = self.db_manager.get_assignments()
+        return db_assignments
+    
+    def update_assignment(self, assignment_id: int, updates: Dict[str, Any]) -> bool:
+        """Update an existing assignment"""
+        try:
+            # First get the assignment from database to get all details
+            db_assignment = self.db_manager.get_assignment_by_id(assignment_id)
+            if not db_assignment:
+                logger.error(f"Assignment {assignment_id} not found in database")
+                return False
+            
+            # Update the database
+            db_updates = {}
+            for field, value in updates.items():
+                # Map frontend field names to database field names
+                if field == 'estimated_duration':
+                    db_updates['duration'] = value
+                elif field == 'assignment_reason':
+                    db_updates['reasoning'] = value
+                else:
+                    db_updates[field] = value
+            
+            success = self.db_manager.update_assignment(assignment_id, db_updates)
+            
+            if success:
+                # Update the in-memory assignment
+                for i, assignment in enumerate(self.current_assignments):
+                    # Try to match by all unique identifiers since we don't store DB ID in memory
+                    if (assignment.employee_id == db_assignment['employee_id'] and 
+                        assignment.patient_id == db_assignment['patient_id'] and
+                        assignment.assigned_time == db_assignment['assigned_time']):
+                        
+                        # Apply updates to the in-memory assignment
+                        assignment_dict = assignment.dict()
+                        assignment_dict.update(updates)
+                        
+                        # Create updated assignment object
+                        updated_assignment = EmployeeAssignment(**assignment_dict)
+                        self.current_assignments[i] = updated_assignment
+                        
+                        logger.info(f"Updated assignment {assignment_id} in memory and database")
+                        break
+                
+                # Log operation
+                self.db_manager.log_operation(
+                    operation_type="assignment_update",
+                    description=f"Updated assignment {assignment_id}",
+                    details={"updates": updates, "assignment_id": assignment_id}
+                )
+                
+                return True
+            
+            return False
+            
+        except Exception as e:
+            logger.error(f"Error updating assignment {assignment_id}: {str(e)}")
+            return False
+    
+    def delete_assignment(self, assignment_id: int) -> bool:
+        """Delete an assignment"""
+        try:
+            # First get the assignment from database
+            db_assignment = self.db_manager.get_assignment_by_id(assignment_id)
+            if not db_assignment:
+                logger.error(f"Assignment {assignment_id} not found in database")
+                return False
+            
+            # Delete from database
+            success = self.db_manager.delete_assignment(assignment_id)
+            
+            if success:
+                # Remove from in-memory assignments
+                for i, assignment in enumerate(self.current_assignments):
+                    if (assignment.employee_id == db_assignment['employee_id'] and 
+                        assignment.patient_id == db_assignment['patient_id'] and
+                        assignment.assigned_time == db_assignment['assigned_time']):
+                        
+                        del self.current_assignments[i]
+                        logger.info(f"Removed assignment {assignment_id} from memory")
+                        break
+                
+                # Update employee assignment count if possible
+                employee = self.data_processor.get_employee_by_id(db_assignment['employee_id'])
+                if employee and employee.current_assignments > 0:
+                    employee.current_assignments -= 1
+                
+                # Log operation
+                self.db_manager.log_operation(
+                    operation_type="assignment_delete",
+                    description=f"Deleted assignment {assignment_id}",
+                    details={"assignment_id": assignment_id, "employee_id": db_assignment['employee_id'], "patient_id": db_assignment['patient_id']}
+                )
+                
+                return True
+            
+            return False
+            
+        except Exception as e:
+            logger.error(f"Error deleting assignment {assignment_id}: {str(e)}")
+            return False
     
     def get_employee_schedule(self, employee_id: str, date: str = None) -> DailySchedule:
         """Get daily schedule for a specific employee"""

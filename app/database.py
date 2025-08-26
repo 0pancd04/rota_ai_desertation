@@ -251,6 +251,67 @@ class DatabaseManager:
         cursor.execute("SELECT * FROM assignments ORDER BY created_at DESC")
         columns = [col[0] for col in cursor.description]
         return [dict(zip(columns, row)) for row in cursor.fetchall()]
+    
+    def update_assignment(self, assignment_id: int, updates: Dict[str, Any]) -> bool:
+        """Update an existing assignment in the database"""
+        try:
+            cursor = self.conn.cursor()
+            
+            # Build dynamic UPDATE query based on provided updates
+            set_clauses = []
+            values = []
+            
+            for field, value in updates.items():
+                if field in ['employee_id', 'employee_name', 'patient_id', 'patient_name', 
+                           'service_type', 'assigned_time', 'start_time', 'end_time', 
+                           'duration', 'travel_time', 'priority_score', 'reasoning']:
+                    set_clauses.append(f"{field} = ?")
+                    values.append(value)
+            
+            if not set_clauses:
+                return False
+                
+            values.append(assignment_id)
+            query = f"UPDATE assignments SET {', '.join(set_clauses)} WHERE id = ?"
+            
+            cursor.execute(query, values)
+            self.conn.commit()
+            
+            updated_rows = cursor.rowcount
+            logger.info(f"Updated assignment {assignment_id}: {updated_rows} rows affected")
+            return updated_rows > 0
+            
+        except Exception as e:
+            logger.error(f"Error updating assignment {assignment_id}: {str(e)}")
+            return False
+    
+    def delete_assignment(self, assignment_id: int) -> bool:
+        """Delete an assignment from the database"""
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute("DELETE FROM assignments WHERE id = ?", (assignment_id,))
+            self.conn.commit()
+            
+            deleted_rows = cursor.rowcount
+            logger.info(f"Deleted assignment {assignment_id}: {deleted_rows} rows affected")
+            return deleted_rows > 0
+            
+        except Exception as e:
+            logger.error(f"Error deleting assignment {assignment_id}: {str(e)}")
+            return False
+    
+    def get_assignment_by_id(self, assignment_id: int) -> Dict:
+        """Get a specific assignment by its ID"""
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute("SELECT * FROM assignments WHERE id = ?", (assignment_id,))
+            columns = [col[0] for col in cursor.description]
+            result = cursor.fetchone()
+            return dict(zip(columns, result)) if result else None
+            
+        except Exception as e:
+            logger.error(f"Error fetching assignment {assignment_id}: {str(e)}")
+            return None
 
     def get_logs(self) -> List[Dict]:
         cursor = self.conn.cursor()

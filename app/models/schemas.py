@@ -127,6 +127,18 @@ class EmployeeAssignment(BaseModel):
     priority_score: float
     assignment_reason: str
 
+class AssignmentUpdateRequest(BaseModel):
+    employee_id: Optional[str] = None
+    patient_id: Optional[str] = None
+    service_type: Optional[ServiceType] = None
+    assigned_time: Optional[str] = None
+    estimated_duration: Optional[int] = None
+    travel_time: Optional[int] = None
+    start_time: Optional[str] = None
+    end_time: Optional[str] = None
+    priority_score: Optional[float] = None
+    assignment_reason: Optional[str] = None
+
 class RotaRequest(BaseModel):
     prompt: str = Field(..., description="Natural language request for employee assignment")
     context: Optional[Dict[str, Any]] = Field(default=None, description="Additional context")

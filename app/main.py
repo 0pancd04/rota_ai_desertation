@@ -18,7 +18,7 @@ from .services.progress_service import progress_service, ProgressType
 from .services.notification_service import NotificationService
 from .services.filter_service import FilterService
 from .services.excel_export_service import ExcelExportService
-from .models.schemas import RotaRequest, RotaResponse, EmployeeAssignment
+from .models.schemas import RotaRequest, RotaResponse, EmployeeAssignment, AssignmentUpdateRequest
 from .models.filter_schemas import FilterConfig, FilterGroup, FilterCondition
 from .database import DatabaseManager
 
@@ -383,6 +383,62 @@ async def get_assignments():
         return {"assignments": assignments}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error fetching assignments: {str(e)}")
+
+@app.put("/assignments/{assignment_id}")
+async def update_assignment(assignment_id: int, request: AssignmentUpdateRequest):
+    """Update an existing assignment"""
+    try:
+        # Convert request to dict, filtering out None values
+        updates = {k: v for k, v in request.dict().items() if v is not None}
+        
+        if not updates:
+            raise HTTPException(status_code=400, detail="No update fields provided")
+        
+        success = rota_service.update_assignment(assignment_id, updates)
+        
+        if success:
+            return {
+                "success": True, 
+                "message": f"Assignment {assignment_id} updated successfully"
+            }
+        else:
+            raise HTTPException(
+                status_code=404, 
+                detail=f"Assignment {assignment_id} not found or could not be updated"
+            )
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, 
+            detail=f"Error updating assignment {assignment_id}: {str(e)}"
+        )
+
+@app.delete("/assignments/{assignment_id}")
+async def delete_assignment(assignment_id: int):
+    """Delete an assignment"""
+    try:
+        success = rota_service.delete_assignment(assignment_id)
+        
+        if success:
+            return {
+                "success": True, 
+                "message": f"Assignment {assignment_id} deleted successfully"
+            }
+        else:
+            raise HTTPException(
+                status_code=404, 
+                detail=f"Assignment {assignment_id} not found or could not be deleted"
+            )
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, 
+            detail=f"Error deleting assignment {assignment_id}: {str(e)}"
+        )
 
 @app.get("/data-status")
 async def get_data_status():
