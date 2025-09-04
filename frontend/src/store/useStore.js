@@ -11,6 +11,7 @@ const useStore = create((set, get) => ({
   loading: false,
   error: null,
   uploadStatus: null,
+  rawUploads: [],
   activeTasks: [],
   notifications: [],
   unreadNotificationsCount: 0,
@@ -39,6 +40,7 @@ const useStore = create((set, get) => ({
       // Refresh data after upload
       await get().fetchEmployees();
       await get().fetchPatients();
+      await get().fetchRawUploads();
       
       return response.data;
     } catch (error) {
@@ -47,6 +49,37 @@ const useStore = create((set, get) => ({
         loading: false 
       });
       throw error;
+    }
+  },
+
+  // Raw uploads listing
+  fetchRawUploads: async () => {
+    try {
+      const res = await axios.get(`${API_BASE_URL}/uploads/raw`);
+      set({ rawUploads: res.data.raw_uploads || [] });
+      return res.data.raw_uploads || [];
+    } catch (e) {
+      return [];
+    }
+  },
+
+  // Raw upload sheet data
+  fetchRawUploadSheet: async (uploadId, sheet) => {
+    try {
+      const res = await axios.get(`${API_BASE_URL}/uploads/raw/${uploadId}/sheet/${encodeURIComponent(sheet)}`);
+      return res.data;
+    } catch (e) {
+      return { columns: [], rows: [] };
+    }
+  },
+
+  // Raw upload metadata (sheet names)
+  fetchRawUploadMeta: async (uploadId) => {
+    try {
+      const res = await axios.get(`${API_BASE_URL}/uploads/raw/${uploadId}`);
+      return res.data || { sheet_names: [] };
+    } catch (e) {
+      return { sheet_names: [] };
     }
   },
 

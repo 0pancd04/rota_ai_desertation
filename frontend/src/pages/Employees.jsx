@@ -15,6 +15,7 @@ function Employees() {
   const { employees, fetchEmployees, loading, clearEmployees, clearEmployeesAndPatients } = useStore();
   const [searchTerm, setSearchTerm] = useState('');
   const [filterQualification, setFilterQualification] = useState('all');
+  const [showSourceMeta, setShowSourceMeta] = useState(false);
 
   useEffect(() => {
     fetchEmployees();
@@ -120,7 +121,7 @@ function Employees() {
 
       {/* Search and Filter */}
       <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
           <div className="relative">
             <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
               <MagnifyingGlassIcon className="h-5 w-5 text-gray-400" />
@@ -147,6 +148,10 @@ function Employees() {
               <option value="Senior Carer">Senior Carer</option>
               <option value="Carer">Carer</option>
             </select>
+          </div>
+          <div className="flex items-center justify-end">
+            <label className="mr-2 text-sm text-gray-600">Show Source Columns</label>
+            <input type="checkbox" checked={showSourceMeta} onChange={(e) => setShowSourceMeta(e.target.checked)} />
           </div>
         </div>
       </div>
@@ -186,6 +191,13 @@ function Employees() {
                   </th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                     Contact
+                  </th>
+                  {/* Hidden by default source metadata */}
+                  <th className={`px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider ${showSourceMeta ? '' : 'hidden'}`}>
+                    Source File
+                  </th>
+                  <th className={`px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider ${showSourceMeta ? '' : 'hidden'}`}>
+                    Uploaded At
                   </th>
                 </tr>
               </thead>
@@ -237,6 +249,12 @@ function Employees() {
                         <PhoneIcon className="h-4 w-4 mr-2" />
                         {employee.ContactNumber}
                       </div>
+                    </td>
+                    <td className={`px-6 py-4 whitespace-nowrap ${showSourceMeta ? '' : 'hidden'}`}>
+                      <div className="text-xs text-gray-500">{employee.SourceFilename}</div>
+                    </td>
+                    <td className={`px-6 py-4 whitespace-nowrap ${showSourceMeta ? '' : 'hidden'}`}>
+                      <div className="text-xs text-gray-500">{employee.SourceUploadedAt}</div>
                     </td>
                   </tr>
                 ))}

@@ -51,6 +51,10 @@ class Employee(BaseModel):
     Shifts: str = Field(..., alias="Shifts")  # Combination of Breakfast/Lunch/Evening
     ContactNumber: str = Field(..., alias="ContactNumber")
     Notes: Optional[str] = Field(None, alias="Notes")
+    # Source metadata
+    SourceFilename: Optional[str] = Field(default=None, alias="SourceFilename")
+    SourceUploadedAt: Optional[str] = Field(default=None, alias="SourceUploadedAt")
+    UploadID: Optional[int] = Field(default=None, alias="UploadID")
     
     # Derived fields for compatibility
     employee_type: EmployeeType = Field(default=EmployeeType.CARE_WORKER, description="Type of employee")
@@ -80,6 +84,10 @@ class Patient(BaseModel):
     EmergencyRelation: str = Field(..., alias="EmergencyRelation")
     LanguagePreference: str = Field(..., alias="LanguagePreference")
     Notes: Optional[str] = Field(None, alias="Notes")
+    # Source metadata
+    SourceFilename: Optional[str] = Field(default=None, alias="SourceFilename")
+    SourceUploadedAt: Optional[str] = Field(default=None, alias="SourceUploadedAt")
+    UploadID: Optional[int] = Field(default=None, alias="UploadID")
     
     # Derived fields for compatibility (computed properties)
     @property

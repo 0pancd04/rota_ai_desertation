@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Dict, List, Any
+import re
 from datetime import datetime, timedelta
 import logging
 
@@ -106,11 +107,68 @@ class StatsService:
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.2
             )
-            text = resp.choices[0].message.content
-            # Simple split: first paragraph then ideas
-            parts = text.split('\n')
-            summary = '\n'.join([p for p in parts if p.strip() and not p.strip().startswith(('-', '*'))][:5])
-            suggestions = '\n'.join([p for p in parts if p.strip().startswith(('-', '*'))][:10])
+            text = resp.choices[0].message.content or ""
+
+            # Normalize newlines
+            parts = [p.rstrip() for p in text.split('\n')]
+
+            def norm_heading(s: str) -> str:
+                # Strip markdown adornments and trailing ':' then lowercase
+                t = s.strip()
+                # Remove leading markdown tokens and bullets
+                t = re.sub(r"^[#>*\-\s•–—\d\.\)]+", "", t)
+                # Remove surrounding bold/italic markers
+                t = t.strip('*_ ')
+                t = t.rstrip(':').strip().lower()
+                return t
+
+            def is_bullet(s: str) -> bool:
+                x = s.lstrip()
+                return bool(re.match(r"^([\-*•–—]|\d+[\.)])\s+", x))
+
+            def clean_bullet(s: str) -> str:
+                x = s.strip()
+                # Remove bullet markers
+                x = re.sub(r"^([\-*•–—]|\d+[\.)])\s+", "", x)
+                return f"- {x}" if x else ""
+
+            # Locate 'Suggestions' heading if present
+            sugg_heading_idx = next((i for i, p in enumerate(parts) if norm_heading(p) == 'suggestions'), None)
+
+            summary_lines: List[str] = []
+            suggestions_lines: List[str] = []
+
+            if sugg_heading_idx is not None:
+                # Everything before heading is summary
+                pre = [p for p in parts[:sugg_heading_idx] if p.strip()]
+                # Remove any explicit 'summary' heading lines from summary
+                summary_lines = [p for p in pre if norm_heading(p) != 'summary']
+                # After heading, collect bullet lines; if none, collect non-empty as bullets
+                post = parts[sugg_heading_idx+1:]
+                bullets = [clean_bullet(p) for p in post if is_bullet(p)]
+                if not bullets:
+                    bullets = [clean_bullet(p) for p in post if p.strip()]
+                suggestions_lines = [b for b in bullets if b]
+            else:
+                # Fallback: find first bullet; summary is before, suggestions are all bullets
+                first_bullet_idx = next((i for i, p in enumerate(parts) if is_bullet(p)), None)
+                if first_bullet_idx is not None:
+                    pre = [p for p in parts[:first_bullet_idx] if p.strip()]
+                    # Drop any trailing line that is a suggestions heading
+                    while pre and norm_heading(pre[-1]) == 'suggestions':
+                        pre.pop()
+                    # Remove any 'summary' heading lines
+                    summary_lines = [p for p in pre if norm_heading(p) != 'summary']
+                    suggestions_lines = [clean_bullet(p) for p in parts[first_bullet_idx:] if is_bullet(p)]
+                else:
+                    # No bullets at all; treat all as summary
+                    summary_lines = [p for p in parts if p.strip() and norm_heading(p) not in ('summary', 'suggestions')]
+                    suggestions_lines = []
+
+            # Final tidy: limit suggestions to 10, strip empties
+            suggestions_lines = [s for s in suggestions_lines if s.strip()][:10]
+            summary = '\n'.join(summary_lines).strip()
+            suggestions = '\n'.join(suggestions_lines).strip()
             return {"summary": summary, "suggestions": suggestions}
         except Exception as e:
             logger.warning(f"AI summarize failed: {e}")

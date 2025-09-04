@@ -43,6 +43,9 @@ class DatabaseManager:
                 shifts TEXT NOT NULL,
                 contact_number TEXT NOT NULL,
                 notes TEXT,
+                source_filename TEXT,
+                source_uploaded_at TEXT,
+                upload_id INTEGER,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
@@ -69,6 +72,9 @@ class DatabaseManager:
                 emergency_relation TEXT NOT NULL,
                 language_preference TEXT NOT NULL,
                 notes TEXT,
+                source_filename TEXT,
+                source_uploaded_at TEXT,
+                upload_id INTEGER,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
@@ -116,6 +122,16 @@ class DatabaseManager:
                 status TEXT NOT NULL
             )
         ''')
+
+        # Table for raw uploads storage (sheets JSON)
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS raw_uploads (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                filename TEXT NOT NULL,
+                uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                sheets_json TEXT NOT NULL
+            )
+        ''')
         
         # Table for notifications
         cursor.execute('''
@@ -149,6 +165,26 @@ class DatabaseManager:
         
         self.conn.commit()
 
+        # Ensure backward-compatible columns exist for source metadata
+        try:
+            self._ensure_column('employees', 'source_filename', 'TEXT')
+            self._ensure_column('employees', 'source_uploaded_at', 'TEXT')
+            self._ensure_column('employees', 'upload_id', 'INTEGER')
+            self._ensure_column('patients', 'source_filename', 'TEXT')
+            self._ensure_column('patients', 'source_uploaded_at', 'TEXT')
+            self._ensure_column('patients', 'upload_id', 'INTEGER')
+        except Exception as e:
+            logger.warning(f"Column ensure failed: {e}")
+
+    def _ensure_column(self, table: str, column: str, coltype: str):
+        """Ensure a column exists on a table; add it if missing (SQLite)."""
+        cur = self.conn.cursor()
+        cur.execute(f"PRAGMA table_info({table})")
+        cols = [r[1] for r in cur.fetchall()]
+        if column not in cols:
+            cur.execute(f"ALTER TABLE {table} ADD COLUMN {column} {coltype}")
+            self.conn.commit()
+
     def store_employees(self, employees: List[Dict[str, Any]]):
         """Store employees in the database"""
         cursor = self.conn.cursor()
@@ -161,14 +197,16 @@ class DatabaseManager:
                 INSERT INTO employees (
                     employee_id, name, address, postcode, gender, ethnicity, religion,
                     transport_mode, qualification, language_spoken, certificate_expiry_date,
-                    earliest_start, latest_end, shifts, contact_number, notes
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    earliest_start, latest_end, shifts, contact_number, notes,
+                    source_filename, source_uploaded_at, upload_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
-                emp['EmployeeID'], emp['Name'], emp['Address'], emp['PostCode'],
-                emp['Gender'], emp['Ethnicity'], emp['Religion'], emp['TransportMode'],
-                emp['Qualification'], emp['LanguageSpoken'], emp['CertificateExpiryDate'],
-                emp['EarliestStart'], emp['LatestEnd'], emp['Shifts'], emp['ContactNumber'],
-                emp.get('Notes', '')
+                emp.get('EmployeeID'), emp.get('Name'), emp.get('Address'), emp.get('PostCode'),
+                emp.get('Gender'), emp.get('Ethnicity'), emp.get('Religion'), emp.get('TransportMode'),
+                emp.get('Qualification'), emp.get('LanguageSpoken'), emp.get('CertificateExpiryDate'),
+                emp.get('EarliestStart'), emp.get('LatestEnd'), emp.get('Shifts'), emp.get('ContactNumber'),
+                emp.get('Notes', ''),
+                emp.get('SourceFilename'), emp.get('SourceUploadedAt'), emp.get('UploadID')
             ))
         
         self.conn.commit()
@@ -187,18 +225,105 @@ class DatabaseManager:
                     patient_id, patient_name, address, postcode, gender, ethnicity, religion,
                     required_support, required_hours_of_support, additional_requirements,
                     illness, contact_number, requires_medication, emergency_contact,
-                    emergency_relation, language_preference, notes
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    emergency_relation, language_preference, notes,
+                    source_filename, source_uploaded_at, upload_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
-                pat['PatientID'], pat['PatientName'], pat['Address'], pat['PostCode'],
-                pat['Gender'], pat['Ethnicity'], pat['Religion'], pat['RequiredSupport'],
-                pat['RequiredHoursOfSupport'], pat['AdditionalRequirements'], pat['Illness'],
-                pat['ContactNumber'], pat['RequiresMedication'], pat['EmergencyContact'],
-                pat['EmergencyRelation'], pat['LanguagePreference'], pat.get('Notes', '')
+                pat.get('PatientID'), pat.get('PatientName'), pat.get('Address'), pat.get('PostCode'),
+                pat.get('Gender'), pat.get('Ethnicity'), pat.get('Religion'), pat.get('RequiredSupport'),
+                pat.get('RequiredHoursOfSupport'), pat.get('AdditionalRequirements'), pat.get('Illness'),
+                pat.get('ContactNumber'), pat.get('RequiresMedication'), pat.get('EmergencyContact'),
+                pat.get('EmergencyRelation'), pat.get('LanguagePreference'), pat.get('Notes', ''),
+                pat.get('SourceFilename'), pat.get('SourceUploadedAt'), pat.get('UploadID')
             ))
         
         self.conn.commit()
         logger.info(f"Stored {len(patients)} patients in database")
+
+    # --- Raw uploads ---
+    def save_raw_upload(self, filename: str, sheets: Dict[str, Any]) -> int:
+        """Store raw upload sheets as JSON and return upload id."""
+        try:
+            cursor = self.conn.cursor()
+            payload = json.dumps(sheets)
+            cursor.execute('''
+                INSERT INTO raw_uploads (filename, sheets_json)
+                VALUES (?, ?)
+            ''', (filename, payload))
+            self.conn.commit()
+            return cursor.lastrowid
+        except Exception as e:
+            logger.error(f"Error saving raw upload: {e}")
+            return None
+
+    def get_raw_uploads(self) -> List[Dict]:
+        """List raw uploads with basic info."""
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute("SELECT id, filename, uploaded_at FROM raw_uploads ORDER BY uploaded_at DESC")
+            cols = [c[0] for c in cursor.description]
+            return [dict(zip(cols, row)) for row in cursor.fetchall()]
+        except Exception as e:
+            logger.error(f"Error fetching raw uploads: {e}")
+            return []
+
+    def get_raw_upload(self, upload_id: int) -> Dict:
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute("SELECT id, filename, uploaded_at, sheets_json FROM raw_uploads WHERE id = ?", (upload_id,))
+            row = cursor.fetchone()
+            if not row:
+                return None
+            data = {
+                "id": row[0],
+                "filename": row[1],
+                "uploaded_at": row[2],
+                "sheets": {}
+            }
+            try:
+                data["sheets"] = json.loads(row[3])
+            except Exception:
+                data["sheets"] = {}
+            return data
+        except Exception as e:
+            logger.error(f"Error fetching raw upload {upload_id}: {e}")
+            return None
+
+    def get_raw_upload_sheet(self, upload_id: int, sheet_name: str) -> Dict:
+        """Return columns and rows for a specific sheet from a raw upload."""
+        try:
+            data = self.get_raw_upload(upload_id)
+            if not data:
+                return None
+            sheets = data.get("sheets", {})
+            # Try exact, then case-insensitive match
+            if sheet_name in sheets:
+                rows = sheets[sheet_name]
+            else:
+                match = None
+                for key in sheets.keys():
+                    if key.lower() == sheet_name.lower():
+                        match = key
+                        break
+                rows = sheets.get(match, []) if match else []
+            # Sanitize rows for strict JSON (replace NaN/Inf with None)
+            import math
+            def _san(v):
+                if isinstance(v, float):
+                    if math.isnan(v) or math.isinf(v):
+                        return None
+                    return v
+                if isinstance(v, dict):
+                    return {k: _san(x) for k, x in v.items()}
+                if isinstance(v, list):
+                    return [_san(x) for x in v]
+                return v
+            safe_rows = [_san(r) for r in rows]
+            columns = list(safe_rows[0].keys()) if safe_rows else []
+            return {"columns": columns, "rows": safe_rows}
+        except Exception as e:
+            logger.error(f"Error fetching raw upload sheet: {e}")
+            return {"columns": [], "rows": []}
 
     def get_employees(self) -> List[Dict]:
         """Get all employees from database"""

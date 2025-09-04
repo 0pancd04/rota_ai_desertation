@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import useStore from '../store/useStore';
 import { 
   CloudArrowUpIcon, 
@@ -10,9 +10,19 @@ import {
 } from '@heroicons/react/24/outline';
 
 function DataUpload() {
-  const { uploadDataFile, uploadStatus, loading, error } = useStore();
+  const { uploadDataFile, uploadStatus, loading, error, rawUploads, fetchRawUploads, fetchRawUploadSheet, fetchRawUploadMeta } = useStore();
   const [file, setFile] = useState(null);
   const [dragActive, setDragActive] = useState(false);
+  const [selectedUpload, setSelectedUpload] = useState(null);
+  const [selectedSheet, setSelectedSheet] = useState('');
+  const [sheetOptions, setSheetOptions] = useState(['Patients','Employee','EmployeeDetails','PatientDetails']);
+  const [rawColumns, setRawColumns] = useState([]);
+  const [rawRows, setRawRows] = useState([]);
+  const fileInputRef = useRef(null);
+
+  useEffect(() => {
+    fetchRawUploads();
+  }, []);
 
   const handleDrag = (e) => {
     e.preventDefault();
@@ -56,8 +66,31 @@ function DataUpload() {
     try {
       await uploadDataFile(file);
       setFile(null);
+      await fetchRawUploads();
     } catch (err) {
       console.error('Upload failed:', err);
+    }
+  };
+
+  const handleSelectUpload = async (upload) => {
+    setSelectedUpload(upload);
+    // load meta to populate sheet dropdown
+    const meta = await fetchRawUploadMeta(upload.id);
+    const names = meta.sheet_names && meta.sheet_names.length ? meta.sheet_names : ['Patients','Employee'];
+    setSheetOptions(names);
+    const def = names[0];
+    setSelectedSheet(def);
+    const data = await fetchRawUploadSheet(upload.id, def);
+    setRawColumns(data.columns || []);
+    setRawRows(data.rows || []);
+  };
+
+  const handleChangeSheet = async (sheet) => {
+    setSelectedSheet(sheet);
+    if (selectedUpload) {
+      const data = await fetchRawUploadSheet(selectedUpload.id, sheet);
+      setRawColumns(data.columns || []);
+      setRawRows(data.rows || []);
     }
   };
 
@@ -77,7 +110,7 @@ function DataUpload() {
         <form onSubmit={handleSubmit} className="space-y-6">
           {/* File Upload Area */}
           <div
-            className={`relative border-2 border-dashed rounded-lg p-12 transition-colors ${
+            className={`relative border-2 border-dashed rounded-lg p-12 transition-colors cursor-pointer ${
               dragActive 
                 ? 'border-blue-400 bg-blue-50' 
                 : 'border-gray-300 hover:border-gray-400'
@@ -86,6 +119,7 @@ function DataUpload() {
             onDragLeave={handleDrag}
             onDragOver={handleDrag}
             onDrop={handleDrop}
+            onClick={() => fileInputRef.current && fileInputRef.current.click()}
           >
             <div className="text-center">
               <div className="mx-auto h-16 w-16 mb-4">
@@ -119,6 +153,7 @@ function DataUpload() {
                     className="sr-only"
                     accept=".xlsx,.xls"
                     onChange={handleChange}
+                    ref={fileInputRef}
                   />
                 </label>
               </div>
@@ -192,6 +227,69 @@ function DataUpload() {
           </div>
         </div>
       )}
+
+      {/* Upload History */}
+      <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+        <h3 className="text-lg font-medium text-gray-900 mb-4 flex items-center">
+          <DocumentTextIcon className="h-5 w-5 text-gray-600 mr-2" />
+          Upload History (Raw)
+        </h3>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          <div className="md:col-span-1">
+            <div className="max-h-80 overflow-y-auto border rounded">
+              {rawUploads.length === 0 ? (
+                <div className="p-4 text-sm text-gray-500">No uploads yet</div>
+              ) : (
+                rawUploads.map(u => (
+                  <button key={u.id} onClick={() => handleSelectUpload(u)} className={`w-full text-left p-3 border-b hover:bg-gray-50 ${selectedUpload?.id === u.id ? 'bg-blue-50' : ''}`}>
+                    <div className="text-sm font-medium text-gray-900">{u.filename}</div>
+                    <div className="text-xs text-gray-500">{u.uploaded_at}</div>
+                  </button>
+                ))
+              )}
+            </div>
+          </div>
+          <div className="md:col-span-2">
+            {selectedUpload ? (
+              <div>
+                <div className="flex items-center space-x-3 mb-3">
+                  <span className="text-sm text-gray-600">View sheet:</span>
+                  <select value={selectedSheet} onChange={(e) => handleChangeSheet(e.target.value)} className="border rounded px-2 py-1 text-sm">
+                    {sheetOptions.map(name => (
+                      <option key={name} value={name}>{name}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="overflow-x-auto border rounded">
+                  <table className="min-w-full divide-y divide-gray-200 table-fixed">
+                    <thead className="bg-gray-50">
+                      <tr>
+                        {rawColumns.map(col => (
+                          <th key={col} className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase break-words">{col}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody className="bg-white divide-y divide-gray-200">
+                      {rawRows.slice(0, 50).map((row, idx) => (
+                        <tr key={idx} className="hover:bg-gray-50 align-top">
+                          {rawColumns.map(col => (
+                            <td key={col} className="px-3 py-2 text-xs text-gray-700 whitespace-pre-wrap break-words max-w-xs">{String(row?.[col] ?? '')}</td>
+                          ))}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  {rawRows.length > 50 && (
+                    <div className="p-2 text-xs text-gray-500">Showing first 50 rows</div>
+                  )}
+                </div>
+              </div>
+            ) : (
+              <div className="text-sm text-gray-500">Select an upload on the left to preview its raw data</div>
+            )}
+          </div>
+        </div>
+      </div>
 
       {/* Instructions */}
       <div className="bg-blue-50 rounded-lg p-6 border border-blue-200">

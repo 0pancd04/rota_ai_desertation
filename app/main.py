@@ -287,7 +287,9 @@ async def upload_data(file: UploadFile = File(...)):
             "message": "File uploaded and processed successfully",
             "filename": file.filename,
             "employees_count": len(result.get("employees", [])),
-            "patients_count": len(result.get("patients", []))
+            "patients_count": len(result.get("patients", [])),
+            "upload_id": result.get("upload_id"),
+            "sheets": result.get("sheets", [])
         }
     except Exception as e:
         import logging
@@ -773,6 +775,42 @@ async def get_database_uploads():
         return {"uploads": uploads}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error fetching uploads from database: {str(e)}")
+
+@app.get("/uploads/raw")
+async def list_raw_uploads():
+    """List raw uploads stored for history (filename, uploaded_at, id)."""
+    try:
+        rows = db_manager.get_raw_uploads()
+        return {"raw_uploads": rows}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error listing raw uploads: {str(e)}")
+
+@app.get("/uploads/raw/{upload_id}")
+async def get_raw_upload(upload_id: int):
+    """Get a raw upload record (sheets listing only)."""
+    try:
+        data = db_manager.get_raw_upload(upload_id)
+        if not data:
+            raise HTTPException(status_code=404, detail="Raw upload not found")
+        # Don't return full sheets by default to keep payload small
+        return {"id": data["id"], "filename": data["filename"], "uploaded_at": data["uploaded_at"], "sheet_names": list(data.get("sheets", {}).keys())}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error fetching raw upload: {str(e)}")
+
+@app.get("/uploads/raw/{upload_id}/sheet/{sheet}")
+async def get_raw_upload_sheet(upload_id: int, sheet: str):
+    """Return columns and rows for a specific sheet of a raw upload."""
+    try:
+        data = db_manager.get_raw_upload_sheet(upload_id, sheet)
+        if data is None:
+            raise HTTPException(status_code=404, detail="Raw upload or sheet not found")
+        return data
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error fetching raw upload sheet: {str(e)}")
 
 @app.post("/database/clear")
 async def clear_database():

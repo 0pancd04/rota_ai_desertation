@@ -16,6 +16,7 @@ function Patients() {
   const { patients, fetchPatients, loading, clearPatients, clearEmployeesAndPatients } = useStore();
   const [searchTerm, setSearchTerm] = useState('');
   const [filterMedication, setFilterMedication] = useState('all');
+  const [showSourceMeta, setShowSourceMeta] = useState(false);
 
   useEffect(() => {
     fetchPatients();
@@ -115,7 +116,7 @@ function Patients() {
 
       {/* Search and Filter */}
       <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
           <div className="relative">
             <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
               <MagnifyingGlassIcon className="h-5 w-5 text-gray-400" />
@@ -141,6 +142,10 @@ function Patients() {
               <option value="yes">Requires Medication</option>
               <option value="no">No Medication</option>
             </select>
+          </div>
+          <div className="flex items-center justify-end">
+            <label className="mr-2 text-sm text-gray-600">Show Source Columns</label>
+            <input type="checkbox" checked={showSourceMeta} onChange={(e) => setShowSourceMeta(e.target.checked)} />
           </div>
         </div>
       </div>
@@ -180,6 +185,13 @@ function Patients() {
                   </th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                     Emergency Contact
+                  </th>
+                  {/* Hidden by default source metadata */}
+                  <th className={`px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider ${showSourceMeta ? '' : 'hidden'}`}>
+                    Source File
+                  </th>
+                  <th className={`px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider ${showSourceMeta ? '' : 'hidden'}`}>
+                    Uploaded At
                   </th>
                 </tr>
               </thead>
@@ -234,6 +246,12 @@ function Patients() {
                         <PhoneIcon className="h-4 w-4 mr-2" />
                         {patient.EmergencyContact}
                       </div>
+                    </td>
+                    <td className={`px-6 py-4 whitespace-nowrap ${showSourceMeta ? '' : 'hidden'}`}>
+                      <div className="text-xs text-gray-500">{patient.SourceFilename}</div>
+                    </td>
+                    <td className={`px-6 py-4 whitespace-nowrap ${showSourceMeta ? '' : 'hidden'}`}>
+                      <div className="text-xs text-gray-500">{patient.SourceUploadedAt}</div>
                     </td>
                   </tr>
                 ))}
