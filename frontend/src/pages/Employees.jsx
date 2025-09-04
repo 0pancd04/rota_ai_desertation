@@ -12,7 +12,7 @@ import {
 } from '@heroicons/react/24/outline';
 
 function Employees() {
-  const { employees, fetchEmployees, loading } = useStore();
+  const { employees, fetchEmployees, loading, clearEmployees, clearEmployeesAndPatients } = useStore();
   const [searchTerm, setSearchTerm] = useState('');
   const [filterQualification, setFilterQualification] = useState('all');
 
@@ -79,6 +79,18 @@ function Employees() {
         </div>
         <h1 className="text-3xl font-bold text-gray-900 mb-2">Employee Management</h1>
         <p className="text-lg text-gray-600">View and manage your healthcare staff</p>
+        <div className="mt-3 flex items-center justify-center space-x-2">
+          <button
+            onClick={clearEmployees}
+            className="px-3 py-2 rounded border text-sm bg-white"
+            disabled={loading}
+          >Clear Employees</button>
+          <button
+            onClick={clearEmployeesAndPatients}
+            className="px-3 py-2 rounded bg-red-600 text-white text-sm"
+            disabled={loading}
+          >Clear Employees & Patients</button>
+        </div>
       </div>
 
       {/* Stats Grid */}

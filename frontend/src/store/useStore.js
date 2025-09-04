@@ -14,6 +14,7 @@ const useStore = create((set, get) => ({
   activeTasks: [],
   notifications: [],
   unreadNotificationsCount: 0,
+  stats: null,
 
   // Actions
   setLoading: (loading) => set({ loading }),
@@ -202,6 +203,63 @@ const useStore = create((set, get) => ({
     }
   },
 
+  // Reanalyze selected assignments
+  reanalyzeAssignments: async (assignmentIds, allowTimeChange = false) => {
+    set({ loading: true, error: null });
+    try {
+      const response = await axios.post(`${API_BASE_URL}/assignments/reanalyze`, {
+        assignment_ids: assignmentIds,
+        allow_time_change: allowTimeChange
+      });
+      if (response.data.success) {
+        await get().fetchAssignments();
+        set({ loading: false });
+        return response.data.updated || [];
+      }
+      throw new Error('Reanalysis failed');
+    } catch (error) {
+      set({ error: error.response?.data?.detail || error.message || 'Failed to reanalyze', loading: false });
+      return [];
+    }
+  },
+
+  // Fetch one employee's weekly assignments
+  fetchEmployeeWeekAssignments: async (employeeId, weekStartIso, weekEndIso) => {
+    set({ loading: true, error: null });
+    try {
+      const response = await axios.post(`${API_BASE_URL}/employee/assignments/week`, {
+        employee_id: employeeId,
+        week_start: weekStartIso,
+        week_end: weekEndIso
+      });
+      set({ loading: false });
+      return response.data.assignments || [];
+    } catch (error) {
+      set({ 
+        error: error.response?.data?.detail || 'Failed to fetch employee week assignments',
+        loading: false 
+      });
+      return [];
+    }
+  },
+
+  // Fetch stats with optional force regenerate
+  fetchStats: async (force = false, { days = null, startDate = null, endDate = null } = {}) => {
+    set({ loading: true, error: null });
+    try {
+      const params = { force };
+      if (Array.isArray(days) && days.length > 0) params.days = days.join(',');
+      if (startDate) params.start_date = startDate;
+      if (endDate) params.end_date = endDate;
+      const response = await axios.get(`${API_BASE_URL}/stats`, { params });
+      set({ stats: response.data.stats || null, loading: false });
+      return response.data.stats;
+    } catch (error) {
+      set({ error: error.response?.data?.detail || 'Failed to fetch stats', loading: false });
+      return null;
+    }
+  },
+
   // Generate weekly rota with progress tracking
   generateWeeklyRota: async () => {
     set({ loading: true, error: null });
@@ -324,6 +382,45 @@ const useStore = create((set, get) => ({
       return true;
     } catch (error) {
       console.error('Failed to delete all notifications:', error);
+      return false;
+    }
+  },
+
+  // Clear employees/patients helpers
+  clearEmployees: async () => {
+    set({ loading: true, error: null });
+    try {
+      await axios.post(`${API_BASE_URL}/database/clear-employees`);
+      await get().fetchEmployees();
+      set({ loading: false });
+      return true;
+    } catch (error) {
+      set({ error: error.response?.data?.detail || 'Failed to clear employees', loading: false });
+      return false;
+    }
+  },
+  clearPatients: async () => {
+    set({ loading: true, error: null });
+    try {
+      await axios.post(`${API_BASE_URL}/database/clear-patients`);
+      await get().fetchPatients();
+      set({ loading: false });
+      return true;
+    } catch (error) {
+      set({ error: error.response?.data?.detail || 'Failed to clear patients', loading: false });
+      return false;
+    }
+  },
+  clearEmployeesAndPatients: async () => {
+    set({ loading: true, error: null });
+    try {
+      await axios.post(`${API_BASE_URL}/database/clear-people`);
+      await get().fetchEmployees();
+      await get().fetchPatients();
+      set({ loading: false });
+      return true;
+    } catch (error) {
+      set({ error: error.response?.data?.detail || 'Failed to clear employees and patients', loading: false });
       return false;
     }
   },

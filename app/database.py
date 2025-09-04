@@ -134,6 +134,18 @@ class DatabaseManager:
                 deleted_at TIMESTAMP
             )
         ''')
+
+        # Table for stats cache
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS stats_cache (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                generated_at TEXT NOT NULL,
+                assignments_count INTEGER NOT NULL,
+                metrics_json TEXT NOT NULL,
+                ai_summary TEXT,
+                ai_ideas TEXT
+            )
+        ''')
         
         self.conn.commit()
 
@@ -325,6 +337,45 @@ class DatabaseManager:
         columns = [col[0] for col in cursor.description]
         return [dict(zip(columns, row)) for row in cursor.fetchall()]
 
+    # --- Stats cache helpers ---
+    def get_latest_stats(self) -> Dict:
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute('SELECT * FROM stats_cache ORDER BY generated_at DESC LIMIT 1')
+            row = cursor.fetchone()
+            if not row:
+                return None
+            columns = [col[0] for col in cursor.description]
+            data = dict(zip(columns, row))
+            # Parse JSON metrics
+            try:
+                data['metrics'] = json.loads(data.pop('metrics_json'))
+            except Exception:
+                data['metrics'] = {}
+            return data
+        except Exception as e:
+            logger.error(f"Error reading latest stats: {e}")
+            return None
+
+    def save_stats(self, assignments_count: int, metrics: Dict, ai_summary: str = None, ai_ideas: str = None) -> bool:
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute('''
+                INSERT INTO stats_cache (generated_at, assignments_count, metrics_json, ai_summary, ai_ideas)
+                VALUES (?, ?, ?, ?, ?)
+            ''', (
+                datetime.now().isoformat(),
+                assignments_count,
+                json.dumps(metrics),
+                ai_summary,
+                ai_ideas
+            ))
+            self.conn.commit()
+            return True
+        except Exception as e:
+            logger.error(f"Error saving stats: {e}")
+            return False
+
     # Notification methods
     def create_notification(self, notification_id: str, notification_type: str, title: str, message: str, action_type: str = None, action_data: Dict = None) -> bool:
         """Create a new notification"""
@@ -474,6 +525,40 @@ class DatabaseManager:
         self.conn.commit()
         logger.info("Cleared all data from database")
 
+    def clear_employees(self):
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute("DELETE FROM employees")
+            self.conn.commit()
+            logger.info("Cleared all employees from database")
+            return True
+        except Exception as e:
+            logger.error(f"Error clearing employees: {e}")
+            return False
+
+    def clear_patients(self):
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute("DELETE FROM patients")
+            self.conn.commit()
+            logger.info("Cleared all patients from database")
+            return True
+        except Exception as e:
+            logger.error(f"Error clearing patients: {e}")
+            return False
+
+    def clear_employees_and_patients(self):
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute("DELETE FROM employees")
+            cursor.execute("DELETE FROM patients")
+            self.conn.commit()
+            logger.info("Cleared all employees and patients from database")
+            return True
+        except Exception as e:
+            logger.error(f"Error clearing employees and patients: {e}")
+            return False
+
     def close(self):
         self.conn.close() 
 
@@ -540,3 +625,41 @@ class DatabaseManager:
         except Exception as e:
             logger.error(f"Error checking employee-patient daily assignment ({employee_id}, {patient_id}): {e}")
             return False
+
+    def get_employee_assignments_for_date(self, employee_id: str, date_iso: str) -> List[Dict]:
+        """Return assignments for an employee on a date, sorted by start_time."""
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute(
+                """
+                SELECT * FROM assignments
+                WHERE employee_id = ?
+                  AND DATE(start_time) = DATE(?)
+                ORDER BY start_time ASC
+                """,
+                (employee_id, date_iso)
+            )
+            columns = [col[0] for col in cursor.description]
+            return [dict(zip(columns, row)) for row in cursor.fetchall()]
+        except Exception as e:
+            logger.error(f"Error fetching employee assignments for date: {e}")
+            return []
+
+    def get_employee_assignments_for_week(self, employee_id: str, start_date_iso: str, end_date_iso: str) -> List[Dict]:
+        """Return assignments for an employee in [start_date, end_date], sorted by start_time."""
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute(
+                """
+                SELECT * FROM assignments
+                WHERE employee_id = ?
+                  AND DATE(start_time) BETWEEN DATE(?) AND DATE(?)
+                ORDER BY start_time ASC
+                """,
+                (employee_id, start_date_iso, end_date_iso)
+            )
+            columns = [col[0] for col in cursor.description]
+            return [dict(zip(columns, row)) for row in cursor.fetchall()]
+        except Exception as e:
+            logger.error(f"Error fetching employee assignments for week: {e}")
+            return []

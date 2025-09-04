@@ -6,6 +6,8 @@ import DataUpload from './pages/DataUpload';
 import Employees from './pages/Employees';
 import Patients from './pages/Patients';
 import Assignments from './pages/Assignments';
+import AssignmentOverview from './pages/AssignmentOverview';
+import Stats from './pages/Stats';
 import CreateAssignment from './pages/CreateAssignment';
 import { ProgressProvider, useProgress } from './contexts/ProgressContext';
 import ProgressIndicator from './components/ProgressIndicator';
@@ -67,6 +69,18 @@ function AppContent() {
       href: '/assignments', 
       icon: ClipboardDocumentListIcon,
       current: location.pathname === '/assignments'
+    },
+    { 
+      name: 'Assignment Overview', 
+      href: '/assignment-overview', 
+      icon: ClipboardDocumentListIcon,
+      current: location.pathname === '/assignment-overview'
+    },
+    { 
+      name: 'Stats', 
+      href: '/stats', 
+      icon: ClipboardDocumentListIcon,
+      current: location.pathname === '/stats'
     },
     { 
       name: 'Create Assignment', 
@@ -224,6 +238,8 @@ function AppContent() {
               <Route path="/employees" element={<Employees />} />
               <Route path="/patients" element={<Patients />} />
               <Route path="/assignments" element={<Assignments />} />
+              <Route path="/assignment-overview" element={<AssignmentOverview />} />
+              <Route path="/stats" element={<Stats />} />
               <Route path="/create-assignment" element={<CreateAssignment />} />
             </Routes>
           </div>

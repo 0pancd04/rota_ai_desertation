@@ -471,3 +471,123 @@ class RotaService:
             pass
         
         return violations 
+
+    def _parse_shift_bounds(self, earliest: str, latest: str):
+        from datetime import time as dtime
+        def _parse(t: str, default: dtime) -> dtime:
+            try:
+                if not t:
+                    return default
+                parts = t.strip().split(":")
+                hour = int(parts[0])
+                minute = int(parts[1]) if len(parts) > 1 else 0
+                return dtime(hour, minute)
+            except Exception:
+                return default
+        return _parse(earliest, dtime(9,0)), _parse(latest, dtime(17,0))
+
+    def _in_shift(self, employee: Employee, start_iso: str, end_iso: str) -> bool:
+        try:
+            start_dt = datetime.fromisoformat(start_iso)
+            end_dt = datetime.fromisoformat(end_iso)
+            e, l = self._parse_shift_bounds(getattr(employee, 'EarliestStart', ''), getattr(employee, 'LatestEnd', ''))
+            day = start_dt.date()
+            shift_start = start_dt.replace(hour=e.hour, minute=e.minute, second=0, microsecond=0)
+            shift_end = start_dt.replace(hour=l.hour, minute=l.minute, second=0, microsecond=0)
+            return start_dt >= shift_start and end_dt <= shift_end
+        except Exception:
+            return True
+
+    def _employee_same_day_assigned(self, employee_id: str, date_iso: str) -> bool:
+        records = self.db_manager.get_employee_assignments_for_date(employee_id, date_iso)
+        return len(records) > 0
+
+    def _calc_travel_minutes(self, employee: Employee, patient: Patient) -> int:
+        origin = f"{employee.Address}, {employee.PostCode}" if employee.PostCode and employee.PostCode not in employee.Address else employee.Address
+        destination = f"{patient.Address}, {patient.PostCode}" if patient.PostCode and patient.PostCode not in patient.Address else patient.Address
+        return self.travel_service.get_travel_time(origin=origin, destination=destination, mode=employee.TransportMode.value)
+
+    def _choose_best_employee_for_reassignment(self, candidates: List[Employee], patient: Patient, start_iso: str, end_iso: str) -> Optional[Employee]:
+        # Rank: has same-day assignments (True first), then by travel time ascending
+        scored: List[tuple[int, int, Employee]] = []
+        for emp in candidates:
+            same_day = 1 if self._employee_same_day_assigned(emp.EmployeeID, start_iso) else 0
+            travel = self._calc_travel_minutes(emp, patient)
+            scored.append(( -same_day, travel, emp ))
+        if not scored:
+            return None
+        scored.sort()
+        return scored[0][2]
+
+    def _get_candidate_employees(self, start_iso: str, end_iso: str, current_employee_id: str) -> List[Employee]:
+        candidates: List[Employee] = []
+        for emp in self.data_processor.employees:
+            if emp.EmployeeID == current_employee_id:
+                continue
+            if not self._in_shift(emp, start_iso, end_iso):
+                continue
+            if self.db_manager.has_overlap_for_employee(emp.EmployeeID, start_iso, end_iso):
+                continue
+            candidates.append(emp)
+        return candidates
+
+    def _update_assignment_employee(self, assignment_id: int, new_employee: Employee, patient: Patient, start_iso: str, end_iso: str) -> bool:
+        travel_min = self._calc_travel_minutes(new_employee, patient)
+        updates = {
+            'employee_id': new_employee.EmployeeID,
+            'employee_name': new_employee.Name,
+            'travel_time': travel_min,
+            'reasoning': 'Reanalyzed and reassigned to nearer available employee',
+            'priority_score': 5.0
+        }
+        return self.db_manager.update_assignment(assignment_id, updates)
+
+    def reanalyze_assignments(self, assignment_ids: List[int], allow_time_change: bool = False) -> List[Dict[str, Any]]:
+        """Reanalyze and reassign selected assignments based on availability and proximity.
+
+        - Prefer employees who already have assignments the same day but are free in the time window
+        - Exclude employees with overlapping assignments
+        - Fallback to nearest available employee even if no same-day assignments
+        - Optional future enhancement: time change when allow_time_change=True (not implemented yet)
+        """
+        updated: List[Dict[str, Any]] = []
+        for aid in assignment_ids:
+            row = self.db_manager.get_assignment_by_id(aid)
+            if not row:
+                continue
+            start_iso = row.get('start_time')
+            end_iso = row.get('end_time')
+            if not start_iso or not end_iso:
+                continue
+            patient = self.data_processor.get_patient_by_id(row.get('patient_id'))
+            if not patient:
+                continue
+            current_emp_id = row.get('employee_id')
+            candidates = self._get_candidate_employees(start_iso, end_iso, current_emp_id)
+            chosen = self._choose_best_employee_for_reassignment(candidates, patient, start_iso, end_iso)
+            if not chosen:
+                # fallback: nearest overall ignoring shift bounds but still non-overlapping
+                fallback = []
+                for emp in self.data_processor.employees:
+                    if emp.EmployeeID == current_emp_id:
+                        continue
+                    if self.db_manager.has_overlap_for_employee(emp.EmployeeID, start_iso, end_iso):
+                        continue
+                    travel = self._calc_travel_minutes(emp, patient)
+                    fallback.append((travel, emp))
+                fallback.sort()
+                chosen = fallback[0][1] if fallback else None
+            if not chosen:
+                continue
+            if self._update_assignment_employee(aid, chosen, patient, start_iso, end_iso):
+                updated.append(self.db_manager.get_assignment_by_id(aid))
+        # Log operation
+        try:
+            self.db_manager.log_operation(
+                operation_type="reanalysis",
+                description="Reanalyzed selected assignments",
+                details={"assignment_ids": assignment_ids, "updated": [a.get('id') for a in updated]}
+            )
+        except Exception:
+            pass
+        return updated

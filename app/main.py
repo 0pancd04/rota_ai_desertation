@@ -18,6 +18,7 @@ from .services.progress_service import progress_service, ProgressType
 from .services.notification_service import NotificationService
 from .services.filter_service import FilterService
 from .services.excel_export_service import ExcelExportService
+from .services.stats_service import StatsService
 from .models.schemas import RotaRequest, RotaResponse, EmployeeAssignment, AssignmentUpdateRequest
 from .models.filter_schemas import FilterConfig, FilterGroup, FilterCondition
 from .database import DatabaseManager
@@ -46,6 +47,7 @@ rota_service = RotaService(data_processor, openai_service, db_manager, travel_se
 notification_service = NotificationService(db_manager)
 filter_service = FilterService(db_manager)
 excel_export_service = ExcelExportService()
+stats_service = StatsService(db_manager, openai_service)
 
 # Startup connectivity checks
 try:
@@ -71,6 +73,15 @@ class BulkDeleteRequest(BaseModel):
     mode: str | None = None  # 'all' | 'filtered' | 'selected'
     ids: list[int] | None = None
     filters: list[FilterGroup] | None = None
+
+class EmployeeWeekRequest(BaseModel):
+    employee_id: str
+    week_start: str  # ISO date, Monday
+    week_end: str    # ISO date, Sunday
+
+class ReanalyzeRequest(BaseModel):
+    assignment_ids: List[int]
+    allow_time_change: bool = False
 
 @app.get("/")
 async def root():
@@ -545,6 +556,23 @@ async def get_database_assignments():
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error fetching assignments from database: {str(e)}")
 
+@app.post("/employee/assignments/week")
+async def get_employee_week_assignments(req: EmployeeWeekRequest):
+    """Get a specific employee's assignments for a week, ordered by start_time."""
+    try:
+        data = db_manager.get_employee_assignments_for_week(req.employee_id, req.week_start, req.week_end)
+        return {"assignments": data}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error fetching employee weekly assignments: {str(e)}")
+
+@app.post("/assignments/reanalyze")
+async def reanalyze_assignments(req: ReanalyzeRequest):
+    try:
+        updated = rota_service.reanalyze_assignments(req.assignment_ids, allow_time_change=req.allow_time_change)
+        return {"success": True, "updated": updated}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error reanalyzing assignments: {str(e)}")
+
 @app.get("/export/assignments-excel")
 async def export_assignments_excel():
     """Export assignments data to Excel with three sheets: assignments, patients, and employees"""
@@ -588,6 +616,21 @@ async def export_assignments_excel():
         import traceback
         logger.error(f"Traceback: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=f"Error exporting Excel data: {str(e)}")
+
+@app.get("/stats")
+async def get_stats(force: bool = False, days: str = None, start_date: str = None, end_date: str = None):
+    try:
+        day_list = None
+        if days:
+            # days as comma-separated integers 0..6 where 0=Mon
+            try:
+                day_list = [int(x) for x in days.split(',') if x.strip() != '']
+            except Exception:
+                day_list = None
+        data = await stats_service.get_or_generate_stats(force=force, days=day_list, start_date=start_date, end_date=end_date)
+        return {"stats": data}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error generating stats: {str(e)}")
 
 @app.get("/test-excel")
 async def test_excel_generation():
@@ -741,6 +784,39 @@ async def clear_database():
         return {"message": "All data cleared successfully"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error clearing database: {str(e)}")
+
+@app.post("/database/clear-employees")
+async def clear_employees():
+    try:
+        ok = db_manager.clear_employees()
+        if ok:
+            data_processor._load_from_database()
+            return {"message": "All employees cleared successfully"}
+        raise Exception("DB clear employees failed")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error clearing employees: {str(e)}")
+
+@app.post("/database/clear-patients")
+async def clear_patients():
+    try:
+        ok = db_manager.clear_patients()
+        if ok:
+            data_processor._load_from_database()
+            return {"message": "All patients cleared successfully"}
+        raise Exception("DB clear patients failed")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error clearing patients: {str(e)}")
+
+@app.post("/database/clear-people")
+async def clear_employees_and_patients():
+    try:
+        ok = db_manager.clear_employees_and_patients()
+        if ok:
+            data_processor._load_from_database()
+            return {"message": "All employees and patients cleared successfully"}
+        raise Exception("DB clear employees and patients failed")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error clearing employees and patients: {str(e)}")
 
 @app.post("/database/reload")
 async def reload_from_database():

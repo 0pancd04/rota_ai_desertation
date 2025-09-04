@@ -13,7 +13,7 @@ import {
 } from '@heroicons/react/24/outline';
 
 function Patients() {
-  const { patients, fetchPatients, loading } = useStore();
+  const { patients, fetchPatients, loading, clearPatients, clearEmployeesAndPatients } = useStore();
   const [searchTerm, setSearchTerm] = useState('');
   const [filterMedication, setFilterMedication] = useState('all');
 
@@ -74,6 +74,18 @@ function Patients() {
         </div>
         <h1 className="text-3xl font-bold text-gray-900 mb-2">Patient Management</h1>
         <p className="text-lg text-gray-600">View and manage patient care requirements</p>
+        <div className="mt-3 flex items-center justify-center space-x-2">
+          <button
+            onClick={clearPatients}
+            className="px-3 py-2 rounded border text-sm bg-white"
+            disabled={loading}
+          >Clear Patients</button>
+          <button
+            onClick={clearEmployeesAndPatients}
+            className="px-3 py-2 rounded bg-red-600 text-white text-sm"
+            disabled={loading}
+          >Clear Employees & Patients</button>
+        </div>
       </div>
 
       {/* Stats Grid */}
