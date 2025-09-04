@@ -110,26 +110,40 @@ class DataProcessor:
             # Save raw upload (all sheets -> list of dicts)
             raw_sheets: Dict[str, Any] = {}
             try:
-                raw_dict = pd.read_excel(file_path, sheet_name=None)
+                # Read all sheets as strings to avoid implicit numeric casting errors
+                raw_dict = pd.read_excel(file_path, sheet_name=None, dtype=str)
                 for sname, sdf in raw_dict.items():
-                    # Convert to list of dicts, ensure JSON-safe by replacing NaN/Inf with None
-                    temp = sdf.copy()
-                    temp = temp.where(pd.notna(temp), None)
-                    recs = temp.to_dict(orient='records')
-                    # deep sanitize (handles float NaN/Inf leaked via dtype)
-                    import math
-                    def _san(v):
-                        if isinstance(v, float):
-                            if math.isnan(v) or math.isinf(v):
-                                return None
+                    try:
+                        temp = sdf.copy()
+                        # Replace NaN-like strings with None uniformly
+                        temp = temp.where(pd.notna(temp), None)
+                        recs = temp.to_dict(orient='records')
+                        # deep sanitize (handles float NaN/Inf leaked via dtype)
+                        import math
+                        def _san(v):
+                            if isinstance(v, float):
+                                if math.isnan(v) or math.isinf(v):
+                                    return None
+                                return v
+                            if isinstance(v, dict):
+                                return {k: _san(x) for k, x in v.items()}
+                            if isinstance(v, list):
+                                return [_san(x) for x in v]
                             return v
-                        if isinstance(v, dict):
-                            return {k: _san(x) for k, x in v.items()}
-                        if isinstance(v, list):
-                            return [_san(x) for x in v]
-                        return v
-                    recs = [_san(r) for r in recs]
-                    raw_sheets[sname] = recs
+                        recs = [_san(r) for r in recs]
+                        raw_sheets[sname] = recs
+                    except Exception as inner:
+                        logger.warning(f"Raw sheet sanitize failed for '{sname}': {inner}")
+                        try:
+                            # Last-resort: build records manually as strings
+                            cols = list(sdf.columns)
+                            manual = []
+                            for _, row in sdf.iterrows():
+                                manual.append({c: (None if pd.isna(row.get(c)) else str(row.get(c))) for c in cols})
+                            raw_sheets[sname] = manual
+                        except Exception as inner2:
+                            logger.warning(f"Raw sheet manual fallback failed for '{sname}': {inner2}")
+                            raw_sheets[sname] = []
             except Exception as e:
                 logger.warning(f"Failed to capture raw sheets: {e}")
 

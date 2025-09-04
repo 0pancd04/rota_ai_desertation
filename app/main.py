@@ -371,7 +371,7 @@ async def generate_weekly_rota(engine: str = Query("core", description="Scheduli
             ("Analyzing employee availability...", 10),
             ("Calculating patient requirements...", 25),
             ("Optimizing assignments...", 50),
-            ("Applying travel constraints...", 75),
+            ("Applying travel constraints (fast mode)...", 75),
             ("Finalizing schedule...", 90)
         ]
         
@@ -379,7 +379,9 @@ async def generate_weekly_rota(engine: str = Query("core", description="Scheduli
             await progress_service.update_progress(task_id, progress, step, len(steps))
             await asyncio.sleep(1)  # Simulate processing time
         
-        # Generate the actual rota
+        # Generate the actual rota (avoid long external API waits by forcing fast travel)
+        import os
+        os.environ.setdefault("FAST_SCHEDULER", "true")
         assignments = await rota_service.generate_weekly_schedule(engine=engine)
         
         # Complete the task
