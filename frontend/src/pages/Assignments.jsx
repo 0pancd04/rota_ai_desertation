@@ -25,6 +25,7 @@ function Assignments() {
     fetchAssignments, 
     updateAssignment,
     deleteAssignment,
+    bulkDeleteAssignments,
     loading, 
     error 
   } = useStore();
@@ -50,6 +51,9 @@ function Assignments() {
 
   const [filteredAssignments, setFilteredAssignments] = useState([]);
   const [displayedAssignments, setDisplayedAssignments] = useState([]);
+  const [selectedIds, setSelectedIds] = useState([]);
+  const [showBulkConfirm, setShowBulkConfirm] = useState(false);
+  const [bulkMode, setBulkMode] = useState(null);
   
   // Edit modal state
   const [editingAssignment, setEditingAssignment] = useState(null);
@@ -187,6 +191,65 @@ function Assignments() {
     setDeletingAssignment(null);
   };
 
+  const toggleSelect = (assignmentId, checked) => {
+    setSelectedIds(prev => {
+      const set = new Set(prev);
+      if (checked) set.add(assignmentId); else set.delete(assignmentId);
+      return Array.from(set);
+    });
+  };
+
+  const toggleSelectAllDisplayed = (checked) => {
+    const ids = displayedAssignments
+      .map(a => a.id)
+      .filter(id => id !== undefined && id !== null);
+    setSelectedIds(prev => {
+      if (checked) {
+        const set = new Set(prev);
+        ids.forEach(id => set.add(id));
+        return Array.from(set);
+      } else {
+        const set = new Set(prev);
+        ids.forEach(id => set.delete(id));
+        return Array.from(set);
+      }
+    });
+  };
+
+  const allDisplayedSelected = displayedAssignments
+    .map(a => a.id)
+    .filter(id => id !== undefined && id !== null)
+    .every(id => selectedIds.includes(id)) && displayedAssignments.length > 0;
+
+  const handleBulkAction = (mode) => {
+    setBulkMode(mode);
+    setShowBulkConfirm(true);
+  };
+
+  const handleBulkConfirm = async () => {
+    try {
+      if (bulkMode === 'selected') {
+        await bulkDeleteAssignments({ mode: 'selected', ids: selectedIds });
+        setSelectedIds([]);
+      } else if (bulkMode === 'filtered') {
+        await bulkDeleteAssignments({ mode: 'filtered', filters });
+        setSelectedIds([]);
+      } else if (bulkMode === 'all') {
+        await bulkDeleteAssignments({ mode: 'all' });
+        setSelectedIds([]);
+      }
+      setShowBulkConfirm(false);
+      setBulkMode(null);
+    } catch (err) {
+      console.error('Bulk delete failed:', err);
+    }
+  };
+
+  const handleBulkCancel = () => {
+    setShowBulkConfirm(false);
+    setBulkMode(null);
+  };
+
 
 
   const getSortIcon = (field) => {
@@ -291,6 +354,33 @@ function Assignments() {
             isLoading={filterLoading}
           />
           <button
+            onClick={() => handleBulkAction('selected')}
+            disabled={selectedIds.length === 0 || loading}
+            className={`inline-flex items-center px-3 py-2 border text-sm font-medium rounded-md ${selectedIds.length === 0 || loading ? 'text-gray-400 border-gray-200 bg-white' : 'text-red-700 border-red-300 bg-white hover:bg-red-50'}`}
+            title="Delete selected assignments"
+          >
+            <TrashIcon className="w-4 h-4 mr-2" />
+            Delete Selected
+          </button>
+          <button
+            onClick={() => handleBulkAction('filtered')}
+            disabled={filters.length === 0 || loading}
+            className={`inline-flex items-center px-3 py-2 border text-sm font-medium rounded-md ${filters.length === 0 || loading ? 'text-gray-400 border-gray-200 bg-white' : 'text-orange-700 border-orange-300 bg-white hover:bg-orange-50'}`}
+            title="Delete all currently filtered assignments"
+          >
+            <TrashIcon className="w-4 h-4 mr-2" />
+            Delete Filtered
+          </button>
+          <button
+            onClick={() => handleBulkAction('all')}
+            disabled={loading}
+            className="inline-flex items-center px-3 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
+            title="Delete all assignments"
+          >
+            <TrashIcon className="w-4 h-4 mr-2" />
+            Clear All
+          </button>
+          <button
             onClick={handleExportExcel}
             className="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
             title="Export assignments data to Excel"
@@ -351,6 +441,13 @@ function Assignments() {
             <table className="min-w-full divide-y divide-gray-200">
               <thead className="bg-gray-50">
                 <tr>
+                  <th className="px-4 py-3">
+                    <input
+                      type="checkbox"
+                      checked={allDisplayedSelected}
+                      onChange={(e) => toggleSelectAllDisplayed(e.target.checked)}
+                    />
+                  </th>
                   <th 
                     className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
                     onClick={() => handleSort('employee_name')}
@@ -413,6 +510,14 @@ function Assignments() {
               <tbody className="bg-white divide-y divide-gray-200">
                 {displayedAssignments.map((assignment, index) => (
                   <tr key={index} className="hover:bg-gray-50">
+                    <td className="px-4 py-4 whitespace-nowrap">
+                      <input
+                        type="checkbox"
+                        checked={selectedIds.includes(assignment.id)}
+                        onChange={(e) => toggleSelect(assignment.id, e.target.checked)}
+                        disabled={assignment.id === undefined || assignment.id === null}
+                      />
+                    </td>
                     <td className="px-6 py-4 whitespace-nowrap">
                       <div className="flex items-center">
                         <div className="w-8 h-8 bg-blue-100 rounded-full flex items-center justify-center mr-3">
@@ -732,6 +837,50 @@ function Assignments() {
                   type="button"
                   className="mt-3 w-full inline-flex justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:text-gray-500 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 sm:mt-0 sm:w-auto sm:text-sm"
                   onClick={handleDeleteCancel}
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Bulk Delete Confirmation Modal */}
+      {showBulkConfirm && (
+        <div className="fixed inset-0 z-50 overflow-y-auto">
+          <div className="flex items-end justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
+            <div className="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity" onClick={handleBulkCancel}></div>
+            <div className="inline-block align-bottom bg-white rounded-lg px-4 pt-5 pb-4 text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full sm:p-6">
+              <div className="sm:flex sm:items-start">
+                <div className="mx-auto flex-shrink-0 flex items-center justify-center h-12 w-12 rounded-full bg-red-100 sm:mx-0 sm:h-10 sm:w-10">
+                  <TrashIcon className="h-6 w-6 text-red-600" />
+                </div>
+                <div className="mt-3 text-center sm:mt-0 sm:ml-4 sm:text-left">
+                  <h3 className="text-lg leading-6 font-medium text-gray-900">
+                    Confirm Bulk Delete
+                  </h3>
+                  <div className="mt-2">
+                    <p className="text-sm text-gray-500">
+                      {bulkMode === 'all' && 'This will delete all assignments.'}
+                      {bulkMode === 'filtered' && 'This will delete all assignments matching current filters.'}
+                      {bulkMode === 'selected' && `This will delete ${selectedIds.length} selected assignments.`}
+                    </p>
+                  </div>
+                </div>
+              </div>
+              <div className="mt-5 sm:mt-4 sm:flex sm:flex-row-reverse">
+                <button
+                  type="button"
+                  className="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-red-600 text-base font-medium text-white hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 sm:ml-3 sm:w-auto sm:text-sm"
+                  onClick={handleBulkConfirm}
+                >
+                  Delete
+                </button>
+                <button
+                  type="button"
+                  className="mt-3 w-full inline-flex justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:text-gray-500 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 sm:mt-0 sm:w-auto sm:text-sm"
+                  onClick={handleBulkCancel}
                 >
                   Cancel
                 </button>

@@ -19,6 +19,15 @@ class OpenAIService:
         )
         self.model = "gpt-3.5-turbo"  # You can change to gpt-4 if needed
     
+    def check_connectivity(self) -> dict:
+        """Simple health check to validate API key and availability."""
+        try:
+            # Minimal, low-cost call (no tokens billed here in real env, but we'll keep it tiny)
+            self.client.models.list()
+            return {"available": True, "reason": "OK"}
+        except Exception as e:
+            return {"available": False, "reason": str(e)}
+    
     async def extract_assignment_details(self, prompt: str) -> Dict[str, Any]:
         """
         Extract assignment details from natural language prompt

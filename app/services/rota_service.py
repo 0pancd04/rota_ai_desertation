@@ -10,6 +10,7 @@ from ..models.schemas import (
     EmployeeType, DailySchedule, QualificationEnum
 )
 from ..database import DatabaseManager
+from .scheduler_core import SchedulerCore
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +21,7 @@ class RotaService:
         self.current_assignments: List[EmployeeAssignment] = []
         self.db_manager = db_manager
         self.travel_service = travel_service
+        self.scheduler_core = SchedulerCore(self.data_processor, self.travel_service, self.db_manager)
         # Load existing assignments from database
         self._load_assignments_from_database()
     
@@ -88,10 +90,16 @@ class RotaService:
             if not available_employees:
                 raise Exception("No employees available at this time")
             
-            # Calculate travel times
+            # Calculate travel times (cached) using full addresses with postcodes when available
             employee_travel_times = {}
+            patient_origin_full = f"{patient.Address}, {patient.PostCode}" if patient.PostCode and patient.PostCode not in patient.Address else patient.Address
             for emp in available_employees:
-                travel_time = self.travel_service.calculate_travel_time(emp.Address, patient.Address, emp.TransportMode.value.lower())
+                emp_origin_full = f"{emp.Address}, {emp.PostCode}" if emp.PostCode and emp.PostCode not in emp.Address else emp.Address
+                travel_time = self.travel_service.get_travel_time(
+                    origin=emp_origin_full,
+                    destination=patient_origin_full,
+                    mode=emp.TransportMode.value
+                )
                 employee_travel_times[emp.EmployeeID] = travel_time
 
             # Enhanced context with more details
@@ -144,21 +152,37 @@ class RotaService:
             logger.error(f"Error processing assignment request: {str(e)}")
             raise
     
-    async def generate_weekly_schedule(self):
-        """Generate weekly schedule for all patients"""
-        self.db_manager.log_operation("weekly_schedule", "Starting weekly schedule generation")
-        assignments = []
-        for patient in self.data_processor.patients:
-            try:
-                prompt = f"Assign employee for patient {patient.PatientID} requiring {patient.RequiredSupport}"
-                assignment = await self.process_assignment_request(prompt)
-                assignments.append(assignment)
-            except Exception as e:
-                logger.error(f"Failed to assign for {patient.PatientID}: {str(e)}")
-        # Simple optimization: sort by time
-        assignments.sort(key=lambda a: a.assigned_time)
-        self.db_manager.log_operation("weekly_schedule", "Completed weekly schedule", {"assignments_count": len(assignments)})
-        return assignments
+    async def generate_weekly_schedule(self, engine: str = "core"):
+        """Generate weekly schedule using the requested engine.
+
+        Returns DB-shaped assignments (with IDs) for frontend compatibility.
+        """
+        self.db_manager.log_operation("weekly_schedule", f"Starting weekly schedule generation (engine={engine})")
+        try:
+            if engine == "core":
+                summary = self.scheduler_core.generate_weekly_rota()
+                logger.info(f"SchedulerCore summary: {summary}")
+                # Return DB rows with IDs
+                assignments = self.db_manager.get_assignments()
+                self.db_manager.log_operation("weekly_schedule", "Completed weekly schedule (core)", {"assignments_count": len(assignments)})
+                return assignments
+            else:
+                # Legacy AI-driven per-patient flow
+                legacy_assignments: List[EmployeeAssignment] = []
+                for patient in self.data_processor.patients:
+                    try:
+                        prompt = f"Assign employee for patient {patient.PatientID} requiring {patient.RequiredSupport}"
+                        assignment = await self.process_assignment_request(prompt)
+                        legacy_assignments.append(assignment)
+                    except Exception as e:
+                        logger.error(f"Failed to assign for {patient.PatientID}: {str(e)}")
+                legacy_assignments.sort(key=lambda a: a.assigned_time)
+                self.db_manager.log_operation("weekly_schedule", "Completed weekly schedule (legacy)", {"assignments_count": len(legacy_assignments)})
+                # For compatibility with frontend editing, return DB rows instead
+                return self.db_manager.get_assignments()
+        except Exception as e:
+            logger.error(f"Error in generate_weekly_schedule: {e}")
+            raise
     
     def _map_service_type(self, service_str: str) -> ServiceType:
         """Map string to ServiceType enum"""
@@ -219,17 +243,21 @@ class RotaService:
         # Calculate end time
         end_datetime = start_datetime + timedelta(minutes=service_duration)
         
+        # Use ISO datetimes to standardize for DB/frontend
+        assigned_iso = start_datetime.replace(second=0, microsecond=0).isoformat()
+        end_iso = end_datetime.replace(second=0, microsecond=0).isoformat()
+
         assignment = EmployeeAssignment(
             employee_id=employee.EmployeeID,
             employee_name=employee.Name,
             patient_id=patient.PatientID,
             patient_name=patient.PatientName,
             service_type=service_type,
-            assigned_time=start_datetime.strftime("%H:%M"),
+            assigned_time=assigned_iso,
             estimated_duration=service_duration,
             travel_time=travel_time,
-            start_time=start_datetime.strftime("%H:%M"),
-            end_time=end_datetime.strftime("%H:%M"),
+            start_time=assigned_iso,
+            end_time=end_iso,
             priority_score=ai_result.get("priority_score", 5.0),
             assignment_reason=ai_result.get("reasoning", "Automatic assignment")
         )
@@ -433,5 +461,13 @@ class RotaService:
         # Workload check
         if employee.current_assignments >= employee.max_patients_per_day:
             violations.append("Employee workload exceeds maximum daily capacity")
+
+        # No multiple same-employee-to-same-patient visits per day (post-clean) safeguard
+        try:
+            start_iso = assignment.start_time
+            if self.db_manager.has_employee_patient_assignment_on_date(employee.EmployeeID, patient.PatientID, start_iso):
+                violations.append("Employee already assigned to this patient today")
+        except Exception:
+            pass
         
         return violations 

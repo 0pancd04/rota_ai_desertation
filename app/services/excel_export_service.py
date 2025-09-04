@@ -117,6 +117,10 @@ class ExcelExportService:
                 # Determine status based on assignment data
                 status = "Active" if assignment.get('assigned_time') else "Pending"
                 
+                # Field compatibility across DB and legacy objects
+                duration_value = assignment.get('duration') if assignment.get('duration') is not None else assignment.get('estimated_duration', 0)
+                reasoning_value = assignment.get('reasoning') if assignment.get('reasoning') is not None else assignment.get('assignment_reason', '')
+
                 row_data = [
                     f"ASG{row-1:04d}",
                     assignment.get('employee_id', ''),
@@ -127,10 +131,10 @@ class ExcelExportService:
                     assignment.get('assigned_time', ''),
                     assignment.get('start_time', ''),
                     assignment.get('end_time', ''),
-                    assignment.get('duration', 0),
+                    duration_value,
                     assignment.get('travel_time', 0),
                     assignment.get('priority_score', 0),
-                    assignment.get('reasoning', ''),
+                    reasoning_value,
                     status
                 ]
                 

@@ -476,3 +476,67 @@ class DatabaseManager:
 
     def close(self):
         self.conn.close() 
+
+    # --- Scheduling helpers ---
+    def has_overlap_for_employee(self, employee_id: str, start_iso: str, end_iso: str) -> bool:
+        """Check if an employee has any assignment overlapping the given interval.
+
+        Only ISO-like datetime rows are considered for robust comparison.
+        """
+        try:
+            from datetime import datetime
+
+            cursor = self.conn.cursor()
+            cursor.execute(
+                "SELECT start_time, end_time FROM assignments WHERE employee_id = ?",
+                (employee_id,)
+            )
+            rows = cursor.fetchall()
+
+            try:
+                new_start = datetime.fromisoformat(start_iso)
+                new_end = datetime.fromisoformat(end_iso)
+            except Exception:
+                # If the proposed times aren't ISO, fail-safe to no-overlap
+                return False
+
+            for row in rows:
+                existing_start_raw, existing_end_raw = row[0], row[1]
+                if not existing_start_raw or not existing_end_raw:
+                    continue
+                try:
+                    existing_start = datetime.fromisoformat(existing_start_raw)
+                    existing_end = datetime.fromisoformat(existing_end_raw)
+                except Exception:
+                    # Skip non-ISO rows (legacy HH:MM values)
+                    continue
+
+                # Overlap if intervals intersect
+                if not (existing_end <= new_start or existing_start >= new_end):
+                    return True
+            return False
+        except Exception as e:
+            logger.error(f"Error checking overlap for employee {employee_id}: {e}")
+            return False
+
+    def has_employee_patient_assignment_on_date(self, employee_id: str, patient_id: str, date_iso: str) -> bool:
+        """Check if an employee already has an assignment with the patient on the given date.
+
+        date_iso can be any ISO datetime on that date; SQLite DATE() will extract the date.
+        """
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute(
+                """
+                SELECT 1 FROM assignments
+                WHERE employee_id = ?
+                  AND patient_id = ?
+                  AND DATE(start_time) = DATE(?)
+                LIMIT 1
+                """,
+                (employee_id, patient_id, date_iso)
+            )
+            return cursor.fetchone() is not None
+        except Exception as e:
+            logger.error(f"Error checking employee-patient daily assignment ({employee_id}, {patient_id}): {e}")
+            return False

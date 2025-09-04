@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, UploadFile, File, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, UploadFile, File, WebSocket, WebSocketDisconnect, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -47,6 +47,19 @@ notification_service = NotificationService(db_manager)
 filter_service = FilterService(db_manager)
 excel_export_service = ExcelExportService()
 
+# Startup connectivity checks
+try:
+    maps_status = travel_service.check_connectivity()
+    ai_status = openai_service.check_connectivity()
+    import logging
+    logging.getLogger(__name__).info(f"Startup checks - Google Maps: {maps_status}, OpenAI: {ai_status}")
+    db_manager.log_operation("startup_health", "Third-party connectivity checks", {
+        "google_maps": maps_status,
+        "openai": ai_status
+    })
+except Exception:
+    pass
+
 # Update progress service with notification service
 progress_service.notification_service = notification_service
 
@@ -54,13 +67,26 @@ progress_service.notification_service = notification_service
 INPUT_FILES_DIR = Path("input_files")
 INPUT_FILES_DIR.mkdir(exist_ok=True)
 
+class BulkDeleteRequest(BaseModel):
+    mode: str | None = None  # 'all' | 'filtered' | 'selected'
+    ids: list[int] | None = None
+    filters: list[FilterGroup] | None = None
+
 @app.get("/")
 async def root():
     return {"message": "AI Rota System for Healthcare is running - Development Mode Active!"}
 
 @app.get("/health")
 async def health_check():
-    return {"status": "healthy", "service": "ai-rota-system"}
+    maps_status = travel_service.check_connectivity()
+    ai_status = openai_service.check_connectivity()
+    overall = maps_status.get("available", False) and ai_status.get("available", False)
+    return {
+        "status": "healthy" if overall else "degraded",
+        "service": "ai-rota-system",
+        "google_maps": maps_status,
+        "openai": ai_status
+    }
 
 @app.websocket("/ws/{client_id}")
 async def websocket_endpoint(websocket: WebSocket, client_id: str):
@@ -315,7 +341,7 @@ async def assign_employee(request: RotaRequest):
         )
 
 @app.post("/generate-weekly-rota")
-async def generate_weekly_rota():
+async def generate_weekly_rota(engine: str = Query("core", description="Scheduling engine: core or legacy")):
     """Generate weekly rota with progress tracking"""
     try:
         # Create progress task
@@ -341,15 +367,15 @@ async def generate_weekly_rota():
             await asyncio.sleep(1)  # Simulate processing time
         
         # Generate the actual rota
-        assignments = await rota_service.generate_weekly_schedule()
+        assignments = await rota_service.generate_weekly_schedule(engine=engine)
         
         # Complete the task
         await progress_service.complete_task(task_id, {
             "success": True,
-            "assignments": [a.dict() for a in assignments]
+            "assignments": assignments
         })
         
-        return {"success": True, "assignments": [a.dict() for a in assignments]}
+        return {"success": True, "assignments": assignments}
     except Exception as e:
         # Mark task as failed
         if 'task_id' in locals():
@@ -439,6 +465,44 @@ async def delete_assignment(assignment_id: int):
             status_code=500, 
             detail=f"Error deleting assignment {assignment_id}: {str(e)}"
         )
+
+@app.post("/assignments/bulk-delete")
+async def bulk_delete_assignments(request: BulkDeleteRequest):
+    """Bulk delete assignments by mode: all, filtered (with filters), or selected IDs."""
+    try:
+        cursor = db_manager.conn.cursor()
+
+        if request.mode == "all":
+            cursor.execute("DELETE FROM assignments")
+            db_manager.conn.commit()
+            return {"success": True, "deleted": cursor.rowcount}
+
+        elif request.mode == "selected":
+            if not request.ids:
+                raise HTTPException(status_code=400, detail="No assignment IDs provided")
+            placeholders = ",".join(["?"] * len(request.ids))
+            cursor.execute(f"DELETE FROM assignments WHERE id IN ({placeholders})", tuple(request.ids))
+            db_manager.conn.commit()
+            return {"success": True, "deleted": cursor.rowcount}
+
+        elif request.mode == "filtered":
+            filters = request.filters or []
+            matches = filter_service.apply_filters_to_assignments(filters)
+            ids = [a.get("id") for a in matches if a.get("id") is not None]
+            if not ids:
+                return {"success": True, "deleted": 0}
+            placeholders = ",".join(["?"] * len(ids))
+            cursor.execute(f"DELETE FROM assignments WHERE id IN ({placeholders})", tuple(ids))
+            db_manager.conn.commit()
+            return {"success": True, "deleted": cursor.rowcount}
+
+        else:
+            raise HTTPException(status_code=400, detail="Invalid mode. Use 'all', 'filtered', or 'selected'.")
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error performing bulk delete: {str(e)}")
 
 @app.get("/data-status")
 async def get_data_status():

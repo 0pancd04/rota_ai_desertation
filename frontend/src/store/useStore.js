@@ -176,6 +176,32 @@ const useStore = create((set, get) => ({
     }
   },
 
+  // Bulk delete assignments
+  bulkDeleteAssignments: async ({ mode = 'all', ids = [], filters = [] } = {}) => {
+    set({ loading: true, error: null });
+    try {
+      const response = await axios.post(`${API_BASE_URL}/assignments/bulk-delete`, {
+        mode,
+        ids,
+        filters
+      });
+      if (response.data.success) {
+        // Refresh assignments
+        await get().fetchAssignments();
+        set({ loading: false });
+        return response.data;
+      } else {
+        throw new Error('Bulk delete failed');
+      }
+    } catch (error) {
+      set({ 
+        error: error.response?.data?.detail || error.message || 'Failed to bulk delete',
+        loading: false 
+      });
+      throw error;
+    }
+  },
+
   // Generate weekly rota with progress tracking
   generateWeeklyRota: async () => {
     set({ loading: true, error: null });

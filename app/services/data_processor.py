@@ -349,3 +349,34 @@ class DataProcessor:
                 qualified.append(emp)
         
         return qualified 
+
+    # --- Derived helpers for scheduling ---
+    def get_patient_services(self, patient: Patient) -> List[ServiceType]:
+        """Parse patient's RequiredSupport string into a list of ServiceType."""
+        return self._parse_services(patient.RequiredSupport)
+
+    def get_default_service_duration(self, service_type: ServiceType) -> int:
+        """Default minutes per service when not otherwise specified."""
+        defaults = {
+            ServiceType.MEDICINE: 30,
+            ServiceType.PERSONAL_CARE: 45,
+            ServiceType.EXERCISE: 30,
+            ServiceType.COMPANIONSHIP: 60,
+        }
+        return defaults.get(service_type, 30)
+
+    def derive_patient_daily_demand(self, patient: Patient) -> int:
+        """Estimate daily minutes of support required for a patient.
+
+        - If weekly hours provided: distribute evenly across 7 days
+        - Else: sum of default durations for listed services (at least 60)
+        """
+        weekly_hours = patient.RequiredHoursOfSupport
+        if isinstance(weekly_hours, int) and weekly_hours and weekly_hours > 0:
+            return max(15, int((weekly_hours * 60) / 7))
+
+        services = self.get_patient_services(patient)
+        if services:
+            total = sum(self.get_default_service_duration(s) for s in services)
+            return max(60, total)
+        return 60

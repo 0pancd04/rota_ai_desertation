@@ -150,6 +150,48 @@ curl -X POST "http://localhost:8000/assign-employee" \
 curl -X GET "http://localhost:8000/assignments"
 ```
 
+### 5. Generate Weekly Rota (Core Engine)
+
+```bash
+curl -X POST "http://localhost:8000/generate-weekly-rota?engine=core"
+```
+Response contains DB-shaped assignments with `id` and ISO times:
+
+```json
+{
+  "success": true,
+  "assignments": [
+    {
+      "id": 12,
+      "employee_id": "EMP001",
+      "employee_name": "John Doe",
+      "patient_id": "PAT005",
+      "patient_name": "Jane Smith",
+      "service_type": "personal_care",
+      "assigned_time": "2025-01-12T09:30:00",
+      "start_time": "2025-01-12T09:30:00",
+      "end_time": "2025-01-12T10:15:00",
+      "duration": 45,
+      "travel_time": 12,
+      "priority_score": 5.0,
+      "reasoning": "Scheduled by core engine"
+    }
+  ]
+}
+```
+
+## Frontend expectations (API shape)
+
+- Assignments objects should contain:
+  - `id` (number): DB row id for edit/delete
+  - `employee_id`, `employee_name`, `patient_id`, `patient_name`
+  - `service_type` (string)
+  - `assigned_time`, `start_time`, `end_time` as ISO strings
+  - `duration` (mins), `travel_time` (mins)
+  - `priority_score` (number), `reasoning` (string)
+
+The Assignments page supports sorting/filtering and editing using these fields. ISO datetime strings are recommended for accurate display and export.
+
 ### 4. View Employees and Patients
 
 ```bash
