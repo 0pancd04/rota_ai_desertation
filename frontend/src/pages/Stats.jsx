@@ -116,15 +116,15 @@ export default function Stats() {
             </div>
           </div>
 
-          {/* AI Summary and Ideas */}
+          {/* AI Summary and Suggestions */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="bg-white border rounded-lg p-4">
               <div className="text-lg font-semibold text-gray-900 mb-2">AI Summary</div>
               <div className="text-gray-700 whitespace-pre-wrap text-sm">{stats.ai_summary || '—'}</div>
             </div>
             <div className="bg-white border rounded-lg p-4">
-              <div className="text-lg font-semibold text-gray-900 mb-2">AI Ideas</div>
-              <div className="text-gray-700 whitespace-pre-wrap text-sm">{stats.ai_ideas || '—'}</div>
+              <div className="text-lg font-semibold text-gray-900 mb-2">AI Suggestions</div>
+              <div className="text-gray-700 whitespace-pre-wrap text-sm">{stats.ai_suggestions || '—'}</div>
             </div>
           </div>
         </>

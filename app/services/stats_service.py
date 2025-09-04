@@ -94,10 +94,12 @@ class StatsService:
             # Use a minimal call to summarize metrics and propose ideas
             client = self.ai.client
             prompt = f"""
-            You are an analytics assistant. Given the following rota metrics as JSON, write:
-            1) A concise summary (<=120 words) highlighting optimizations and impact
-            2) 3 data-backed ideas for further optimization as bullet points
-            JSON:\n{metrics}
+            You are a positive analytics assistant.
+            Given the rota metrics JSON below, produce:
+            1) Summary: A concise, positive summary (<=120 words) highlighting achievements, efficiency gains, and strengths reflected by the numbers.
+            2) Suggestions: 3 short, data-driven operational suggestions (bulleted) ONLY about resource allocation, reassignment, schedule balancing, reducing idle time, or patient acquisition. Do NOT suggest code or new features.
+
+            Metrics JSON:\n{metrics}
             """
             resp = client.chat.completions.create(
                 model=self.ai.model,
@@ -108,11 +110,11 @@ class StatsService:
             # Simple split: first paragraph then ideas
             parts = text.split('\n')
             summary = '\n'.join([p for p in parts if p.strip() and not p.strip().startswith(('-', '*'))][:5])
-            ideas = '\n'.join([p for p in parts if p.strip().startswith(('-', '*'))][:10])
-            return {"summary": summary, "ideas": ideas}
+            suggestions = '\n'.join([p for p in parts if p.strip().startswith(('-', '*'))][:10])
+            return {"summary": summary, "suggestions": suggestions}
         except Exception as e:
             logger.warning(f"AI summarize failed: {e}")
-            return {"summary": "", "ideas": ""}
+            return {"summary": "", "suggestions": ""}
 
     async def get_or_generate_stats(self, force: bool = False, days: List[int] | None = None, start_date: str | None = None, end_date: str | None = None) -> Dict[str, Any]:
         assignments = self.db.get_assignments()
@@ -138,7 +140,7 @@ class StatsService:
                 'assignments_count': len(subset),
                 'metrics': metrics,
                 'ai_summary': ai.get('summary'),
-                'ai_ideas': ai.get('ideas')
+                'ai_suggestions': ai.get('suggestions')
             }
 
         # Unfiltered: use cache unless forced or assignment count changed
@@ -149,7 +151,8 @@ class StatsService:
 
         metrics = self._compute_core_metrics(assignments, employees, patients)
         ai = await self._ai_summarize(metrics)
-        self.db.save_stats(assignments_count=current_assignments, metrics=metrics, ai_summary=ai.get('summary'), ai_ideas=ai.get('ideas'))
+        # Persist suggestions in existing ai_ideas column; response will map to ai_suggestions
+        self.db.save_stats(assignments_count=current_assignments, metrics=metrics, ai_summary=ai.get('summary'), ai_ideas=ai.get('suggestions'))
         return self.db.get_latest_stats()
 
 

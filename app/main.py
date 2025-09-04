@@ -628,6 +628,9 @@ async def get_stats(force: bool = False, days: str = None, start_date: str = Non
             except Exception:
                 day_list = None
         data = await stats_service.get_or_generate_stats(force=force, days=day_list, start_date=start_date, end_date=end_date)
+        # Back-compat: map stored ai_ideas to ai_suggestions in response
+        if data and 'ai_ideas' in data and 'ai_suggestions' not in data:
+            data['ai_suggestions'] = data.pop('ai_ideas')
         return {"stats": data}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error generating stats: {str(e)}")
