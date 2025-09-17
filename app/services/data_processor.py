@@ -48,6 +48,12 @@ class DataProcessor:
                             SourceUploadedAt=emp_data.get('source_uploaded_at'),
                             UploadID=emp_data.get('upload_id')
                         )
+                        # Map new fields if present
+                        try:
+                            setattr(employee, 'RoleLevel', emp_data.get('role_level'))
+                            setattr(employee, 'weekly_capacity_minutes', emp_data.get('weekly_capacity_minutes'))
+                        except Exception:
+                            pass
                         self.employees.append(employee)
                     except Exception as e:
                         logger.warning(f"Error loading employee {emp_data.get('employee_id', 'unknown')}: {str(e)}")
@@ -77,7 +83,15 @@ class DataProcessor:
                             Notes=pat_data.get('notes', ''),
                             SourceFilename=pat_data.get('source_filename'),
                             SourceUploadedAt=pat_data.get('source_uploaded_at'),
-                            UploadID=pat_data.get('upload_id')
+                            UploadID=pat_data.get('upload_id'),
+                            SatSunSupport=pat_data.get('sat_sun_support'),
+                            DaysOfSupport=pat_data.get('days_of_support'),
+                            PreferenceOfCarer=pat_data.get('preference_of_carer'),
+                            RequiredCarerSupport=pat_data.get('required_carer_support'),
+                            MealPrepRequired=bool(pat_data.get('meal_prep_required')),
+                            BreakfastTime=pat_data.get('breakfast_time'),
+                            LunchTime=pat_data.get('lunch_time'),
+                            DinnerTime=pat_data.get('dinner_time')
                         )
                         self.patients.append(patient)
                     except Exception as e:
@@ -238,7 +252,9 @@ class DataProcessor:
                     Notes=self._safe_str(row.get('Notes', '')),
                     SourceFilename=self._safe_str(row.get('SourceFilename', '')) or None,
                     SourceUploadedAt=self._safe_str(row.get('SourceUploadedAt', '')) or None,
-                    UploadID=self._safe_int(row.get('UploadID'))
+                    UploadID=self._safe_int(row.get('UploadID')),
+                    RoleLevel=self._safe_str(row.get('RoleLevel', '')) or None,
+                    weekly_capacity_minutes=self._safe_int(row.get('weekly_capacity_minutes'))
                 )
                 employees.append(employee)
             except Exception as e:
@@ -282,7 +298,7 @@ class DataProcessor:
     def _normalize_employees_df(self, df: pd.DataFrame, filename: str, uploaded_at: str, upload_id: Optional[int]) -> pd.DataFrame:
         if df is None or df.empty:
             # Ensure canonical columns exist
-            cols = ['EmployeeID','Name','Address','PostCode','Gender','Ethnicity','Religion','TransportMode','Qualification','LanguageSpoken','CertificateExpiryDate','EarliestStart','LatestEnd','Shifts','ContactNumber','Notes']
+            cols = ['EmployeeID','Name','Address','PostCode','Gender','Ethnicity','Religion','TransportMode','Qualification','LanguageSpoken','CertificateExpiryDate','EarliestStart','LatestEnd','Shifts','ContactNumber','Notes','RoleLevel','weekly_capacity_minutes']
             out = pd.DataFrame(columns=cols)
         else:
             out = df.copy()
@@ -355,6 +371,31 @@ class DataProcessor:
             else:
                 out['Qualification'] = 'Carer'
 
+        # RoleLevel and weekly capacity minutes
+        rl_col = col_in('Role')
+        if rl_col:
+            def _role_level(x: Any) -> str:
+                s = str(x).strip().lower() if x is not None else ''
+                if 'jr' in s or 'junior' in s:
+                    return 'Junior'
+                if 'senior' in s:
+                    return 'Senior'
+                if 'nurse' in s:
+                    return 'Nurse'
+                return 'Standard'
+            out['RoleLevel'] = out[rl_col].apply(_role_level)
+        else:
+            if 'RoleLevel' not in out.columns:
+                out['RoleLevel'] = 'Standard'
+
+        def _cap_by_role(s: Any) -> int:
+            rs = str(s)
+            if rs == 'Junior':
+                return 20 * 60
+            return 36 * 60
+        if 'weekly_capacity_minutes' not in out.columns:
+            out['weekly_capacity_minutes'] = out['RoleLevel'].apply(_cap_by_role)
+
         # LanguageSpoken
         if 'LanguageSpoken' not in out.columns:
             ls = col_in('LanguageSpoken','Languages')
@@ -381,7 +422,7 @@ class DataProcessor:
         status_col = col_in('Status')
         if status_col:
             try:
-                out = out[out[status_col].astype(str).str.lower().str.contains('active')]
+                out = out[out[status_col].astype(str).str.strip().str.lower().eq('active')]
             except Exception:
                 pass
 
@@ -391,7 +432,7 @@ class DataProcessor:
         out['UploadID'] = upload_id
 
         # Ensure canonical order
-        canon = ['EmployeeID','Name','Address','PostCode','Gender','Ethnicity','Religion','TransportMode','Qualification','LanguageSpoken','CertificateExpiryDate','EarliestStart','LatestEnd','Shifts','ContactNumber','Notes','SourceFilename','SourceUploadedAt','UploadID']
+        canon = ['EmployeeID','Name','Address','PostCode','Gender','Ethnicity','Religion','TransportMode','Qualification','LanguageSpoken','CertificateExpiryDate','EarliestStart','LatestEnd','Shifts','ContactNumber','Notes','SourceFilename','SourceUploadedAt','UploadID','RoleLevel','weekly_capacity_minutes']
         for c in canon:
             if c not in out.columns:
                 out[c] = ''
@@ -399,7 +440,7 @@ class DataProcessor:
 
     def _normalize_patients_df(self, df: pd.DataFrame, filename: str, uploaded_at: str, upload_id: Optional[int]) -> pd.DataFrame:
         if df is None or df.empty:
-            cols = ['PatientID','PatientName','Address','PostCode','Gender','Ethnicity','Religion','RequiredSupport','RequiredHoursOfSupport','AdditionalRequirements','Illness','ContactNumber','RequiresMedication','EmergencyContact','EmergencyRelation','LanguagePreference','Notes']
+            cols = ['PatientID','PatientName','Address','PostCode','Gender','Ethnicity','Religion','RequiredSupport','RequiredHoursOfSupport','AdditionalRequirements','Illness','ContactNumber','RequiresMedication','EmergencyContact','EmergencyRelation','LanguagePreference','Notes','SatSunSupport','DaysOfSupport','PreferenceOfCarer','RequiredCarerSupport','MealPrepRequired','BreakfastTime','LunchTime','DinnerTime']
             out = pd.DataFrame(columns=cols)
         else:
             out = df.copy()
@@ -410,6 +451,14 @@ class DataProcessor:
                     if c.strip().lower() == n.strip().lower():
                         return c
             return None
+
+        # Patient Status filter (Active only if present)
+        status_col = col_in('Status')
+        if status_col:
+            try:
+                out = out[out[status_col].astype(str).str.lower().str.contains('active')]
+            except Exception:
+                pass
 
         # PatientID
         if 'PatientID' not in out.columns:
@@ -464,11 +513,13 @@ class DataProcessor:
                         continue
                     if 'medic' in t:
                         tokens.append('medicine')
+                    elif 'meal' in t:
+                        tokens.append('meal_prep')
                     elif 'exerc' in t:
                         tokens.append('exercise')
                     elif 'shop' in t or 'compan' in t:
                         tokens.append('companionship')
-                    elif 'meal' in t or 'laundry' in t or 'personal' in t or 'care' in t:
+                    elif 'laundry' in t or 'personal' in t or 'care' in t:
                         tokens.append('personal care')
                 return ', '.join(dict.fromkeys(tokens))
             out['RequiredSupport'] = out[vt].apply(map_visit) if vt else ''
@@ -486,7 +537,7 @@ class DataProcessor:
             ('RequiresMedication', ('RequiresMedication','Medication Needed')),
             ('EmergencyContact', ('EmergencyContact','Emergency Contact')),
             ('EmergencyRelation', ('EmergencyRelation','Emergency Relation')),
-            ('LanguagePreference', ('LanguagePreference','Preferred Language')),
+            ('LanguagePreference', ('LanguagePreference','Preferred Language','LanguageSpoken')),
             ('Notes', ('Notes','Remarks'))
         ]:
             if cname not in out.columns:
@@ -502,12 +553,39 @@ class DataProcessor:
         except Exception:
             pass
 
+        # New fields: SatSunSupport, DaysOfSupport, PreferenceOfCarer, RequiredCarerSupport, MealPrepRequired, meal times
+        if 'SatSunSupport' not in out.columns:
+            sss = col_in('SatSunSupport','WeekendSupport','SatSun','Sat_Sun_Support')
+            out['SatSunSupport'] = out[sss] if sss else ''
+        if 'DaysOfSupport' not in out.columns:
+            dos = col_in('DaysOfSupport','ReqDaysOfSupport','reqdayOfSupport','Days')
+            out['DaysOfSupport'] = out[dos] if dos else ''
+        if 'PreferenceOfCarer' not in out.columns:
+            poc = col_in('PreferenceOfCarer','PreferredCarer','CarerPreference')
+            out['PreferenceOfCarer'] = out[poc] if poc else ''
+        if 'RequiredCarerSupport' not in out.columns:
+            rcs = col_in('RequiredCarerSupport','CarersRequired','NumberOfCarers')
+            out['RequiredCarerSupport'] = out[rcs] if rcs else 1
+        if 'MealPrepRequired' not in out.columns:
+            try:
+                out['MealPrepRequired'] = out['RequiredSupport'].astype(str).str.lower().str.contains('meal_prep').astype(int)
+            except Exception:
+                out['MealPrepRequired'] = 0
+        for cname, aliases in [
+            ('BreakfastTime', ('BreakfastTime',)),
+            ('LunchTime', ('LunchTime',)),
+            ('DinnerTime', ('DinnerTime',))
+        ]:
+            if cname not in out.columns:
+                alt = col_in(*aliases)
+                out[cname] = out[alt] if alt else ''
+
         # Attach source metadata
         out['SourceFilename'] = filename
         out['SourceUploadedAt'] = uploaded_at
         out['UploadID'] = upload_id
 
-        canon = ['PatientID','PatientName','Address','PostCode','Gender','Ethnicity','Religion','RequiredSupport','RequiredHoursOfSupport','AdditionalRequirements','Illness','ContactNumber','RequiresMedication','EmergencyContact','EmergencyRelation','LanguagePreference','Notes','SourceFilename','SourceUploadedAt','UploadID']
+        canon = ['PatientID','PatientName','Address','PostCode','Gender','Ethnicity','Religion','RequiredSupport','RequiredHoursOfSupport','AdditionalRequirements','Illness','ContactNumber','RequiresMedication','EmergencyContact','EmergencyRelation','LanguagePreference','Notes','SourceFilename','SourceUploadedAt','UploadID','SatSunSupport','DaysOfSupport','PreferenceOfCarer','RequiredCarerSupport','MealPrepRequired','BreakfastTime','LunchTime','DinnerTime']
         for c in canon:
             if c not in out.columns:
                 out[c] = ''
@@ -602,6 +680,8 @@ class DataProcessor:
             service_lower = service.lower()
             if 'medicine' in service_lower:
                 services.append(ServiceType.MEDICINE)
+            elif 'meal_prep' in service_lower or 'meal prep' in service_lower:
+                services.append(ServiceType.MEAL_PREP)
             elif 'exercise' in service_lower:
                 services.append(ServiceType.EXERCISE)
             elif 'companion' in service_lower:
@@ -685,20 +765,30 @@ class DataProcessor:
             ServiceType.PERSONAL_CARE: 45,
             ServiceType.EXERCISE: 30,
             ServiceType.COMPANIONSHIP: 60,
+            ServiceType.MEAL_PREP: 30,
         }
         return defaults.get(service_type, 30)
 
     def derive_patient_daily_demand(self, patient: Patient) -> int:
-        """Estimate daily minutes of support required for a patient.
+        """Compute daily minutes to be scheduled for a patient.
 
-        - If weekly hours provided: distribute evenly across 7 days
-        - Else: sum of default durations for listed services (at least 60)
+        Rules:
+        - If MEAL_PREP in services: 3 visits of 30 minutes → 90 minutes/day
+        - Else, if RequiredHoursOfSupport provided: interpret as hours per visit → minutes per day = hours * 60
+        - Else, fall back to sum of default durations for listed services (>=60)
         """
-        weekly_hours = patient.RequiredHoursOfSupport
-        if isinstance(weekly_hours, int) and weekly_hours and weekly_hours > 0:
-            return max(15, int((weekly_hours * 60) / 7))
-
         services = self.get_patient_services(patient)
+        # Meal prep overrides
+        try:
+            if ServiceType.MEAL_PREP in services:
+                return 90
+        except Exception:
+            pass
+
+        hours_val = patient.RequiredHoursOfSupport
+        if isinstance(hours_val, int) and hours_val and hours_val > 0:
+            return max(30, int(hours_val * 60))
+
         if services:
             total = sum(self.get_default_service_duration(s) for s in services)
             return max(60, total)

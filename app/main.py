@@ -99,6 +99,21 @@ async def health_check():
         "openai": ai_status
     }
 
+@app.get("/health/travel")
+async def travel_health():
+    """Detailed Google Maps travel health."""
+    try:
+        status = travel_service.check_connectivity()
+        fast_env = os.getenv("FAST_SCHEDULER", "true").strip().lower() in ("1","true","yes","y")
+        return {
+            "available": status.get("available", False),
+            "reason": status.get("reason"),
+            "key_present": bool(travel_service.client),
+            "mode": "api" if status.get("available", False) and not fast_env else "fast"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Travel health error: {e}")
+
 @app.websocket("/ws/{client_id}")
 async def websocket_endpoint(websocket: WebSocket, client_id: str):
     """WebSocket endpoint for real-time progress updates"""
@@ -354,7 +369,7 @@ async def assign_employee(request: RotaRequest):
         )
 
 @app.post("/generate-weekly-rota")
-async def generate_weekly_rota(engine: str = Query("core", description="Scheduling engine: core or legacy")):
+async def generate_weekly_rota(engine: str = Query("core", description="Scheduling engine: core or legacy"), fast: bool = Query(True, description="Use fast travel estimates instead of Google Maps API")):
     """Generate weekly rota with progress tracking"""
     try:
         # Create progress task
@@ -366,22 +381,31 @@ async def generate_weekly_rota(engine: str = Query("core", description="Scheduli
         # Start the task
         await progress_service.start_task(task_id)
         
+        # Emit initial Google Maps mode and connectivity
+        maps_status = travel_service.check_connectivity()
+        mode = "fast" if fast or not maps_status.get("available", False) else "api"
+        await progress_service.update_progress(task_id, 5, f"Travel mode: {mode.upper()} (key {'present' if maps_status.get('available') else 'missing/unavailable'})", 6)
+
+        # Set fast mode for this request scope
+        import os
+        if fast:
+            os.environ["FAST_SCHEDULER"] = "true"
+        else:
+            os.environ["FAST_SCHEDULER"] = "false"
+
         # Simulate progress updates for weekly rota generation
         steps = [
-            ("Analyzing employee availability...", 10),
-            ("Calculating patient requirements...", 25),
-            ("Optimizing assignments...", 50),
-            ("Applying travel constraints (fast mode)...", 75),
-            ("Finalizing schedule...", 90)
+            ("Analyzing employee availability...", 15),
+            ("Calculating patient requirements...", 30),
+            ("Optimizing assignments...", 55),
+            (f"Applying travel constraints ({mode})...", 80),
+            ("Finalizing schedule...", 95)
         ]
-        
         for step, progress in steps:
             await progress_service.update_progress(task_id, progress, step, len(steps))
-            await asyncio.sleep(1)  # Simulate processing time
-        
-        # Generate the actual rota (avoid long external API waits by forcing fast travel)
-        import os
-        os.environ.setdefault("FAST_SCHEDULER", "true")
+            await asyncio.sleep(0.3)
+
+        # Generate the actual rota
         assignments = await rota_service.generate_weekly_schedule(engine=engine)
         
         # Complete the task

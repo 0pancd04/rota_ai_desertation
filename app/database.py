@@ -96,6 +96,7 @@ class DatabaseManager:
                 travel_time INTEGER,
                 priority_score REAL,
                 reasoning TEXT,
+                group_id TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
@@ -170,9 +171,23 @@ class DatabaseManager:
             self._ensure_column('employees', 'source_filename', 'TEXT')
             self._ensure_column('employees', 'source_uploaded_at', 'TEXT')
             self._ensure_column('employees', 'upload_id', 'INTEGER')
+            # New employee columns
+            self._ensure_column('employees', 'role_level', 'TEXT')
+            self._ensure_column('employees', 'weekly_capacity_minutes', 'INTEGER')
             self._ensure_column('patients', 'source_filename', 'TEXT')
             self._ensure_column('patients', 'source_uploaded_at', 'TEXT')
             self._ensure_column('patients', 'upload_id', 'INTEGER')
+            # New patient columns
+            self._ensure_column('patients', 'sat_sun_support', 'TEXT')
+            self._ensure_column('patients', 'days_of_support', 'TEXT')
+            self._ensure_column('patients', 'preference_of_carer', 'TEXT')
+            self._ensure_column('patients', 'required_carer_support', 'INTEGER')
+            self._ensure_column('patients', 'meal_prep_required', 'INTEGER')
+            self._ensure_column('patients', 'breakfast_time', 'TEXT')
+            self._ensure_column('patients', 'lunch_time', 'TEXT')
+            self._ensure_column('patients', 'dinner_time', 'TEXT')
+            # New assignments columns
+            self._ensure_column('assignments', 'group_id', 'TEXT')
         except Exception as e:
             logger.warning(f"Column ensure failed: {e}")
 
@@ -198,15 +213,17 @@ class DatabaseManager:
                     employee_id, name, address, postcode, gender, ethnicity, religion,
                     transport_mode, qualification, language_spoken, certificate_expiry_date,
                     earliest_start, latest_end, shifts, contact_number, notes,
-                    source_filename, source_uploaded_at, upload_id
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    source_filename, source_uploaded_at, upload_id,
+                    role_level, weekly_capacity_minutes
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
                 emp.get('EmployeeID'), emp.get('Name'), emp.get('Address'), emp.get('PostCode'),
                 emp.get('Gender'), emp.get('Ethnicity'), emp.get('Religion'), emp.get('TransportMode'),
                 emp.get('Qualification'), emp.get('LanguageSpoken'), emp.get('CertificateExpiryDate'),
                 emp.get('EarliestStart'), emp.get('LatestEnd'), emp.get('Shifts'), emp.get('ContactNumber'),
                 emp.get('Notes', ''),
-                emp.get('SourceFilename'), emp.get('SourceUploadedAt'), emp.get('UploadID')
+                emp.get('SourceFilename'), emp.get('SourceUploadedAt'), emp.get('UploadID'),
+                emp.get('RoleLevel'), emp.get('weekly_capacity_minutes')
             ))
         
         self.conn.commit()
@@ -226,15 +243,20 @@ class DatabaseManager:
                     required_support, required_hours_of_support, additional_requirements,
                     illness, contact_number, requires_medication, emergency_contact,
                     emergency_relation, language_preference, notes,
-                    source_filename, source_uploaded_at, upload_id
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    source_filename, source_uploaded_at, upload_id,
+                    sat_sun_support, days_of_support, preference_of_carer, required_carer_support,
+                    meal_prep_required, breakfast_time, lunch_time, dinner_time
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
                 pat.get('PatientID'), pat.get('PatientName'), pat.get('Address'), pat.get('PostCode'),
                 pat.get('Gender'), pat.get('Ethnicity'), pat.get('Religion'), pat.get('RequiredSupport'),
                 pat.get('RequiredHoursOfSupport'), pat.get('AdditionalRequirements'), pat.get('Illness'),
                 pat.get('ContactNumber'), pat.get('RequiresMedication'), pat.get('EmergencyContact'),
                 pat.get('EmergencyRelation'), pat.get('LanguagePreference'), pat.get('Notes', ''),
-                pat.get('SourceFilename'), pat.get('SourceUploadedAt'), pat.get('UploadID')
+                pat.get('SourceFilename'), pat.get('SourceUploadedAt'), pat.get('UploadID'),
+                pat.get('SatSunSupport'), pat.get('DaysOfSupport'), pat.get('PreferenceOfCarer'), pat.get('RequiredCarerSupport'),
+                (1 if pat.get('MealPrepRequired') in (True, 'Y', 'y', 'yes', 'Yes', 1) else 0),
+                pat.get('BreakfastTime'), pat.get('LunchTime'), pat.get('DinnerTime')
             ))
         
         self.conn.commit()
@@ -355,8 +377,8 @@ class DatabaseManager:
             INSERT INTO assignments (
                 employee_id, employee_name, patient_id, patient_name, service_type, assigned_time,
                 start_time, end_time, duration, travel_time,
-                priority_score, reasoning
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                priority_score, reasoning, group_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (
             assignment['employee_id'],
             assignment['employee_name'],
@@ -369,7 +391,8 @@ class DatabaseManager:
             assignment.get('estimated_duration'),
             assignment.get('travel_time'),
             assignment.get('priority_score'),
-            assignment.get('assignment_reason')
+            assignment.get('assignment_reason'),
+            assignment.get('group_id')
         ))
         self.conn.commit()
         logger.info(f"Logged assignment: {assignment['employee_id']} to {assignment['patient_id']}")

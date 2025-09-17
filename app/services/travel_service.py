@@ -46,7 +46,7 @@ class TravelService:
 
     def calculate_travel_time(self, origin: str, destination: str, mode: str = "driving") -> int:
         """Calculate travel time in minutes using Distance Matrix, with Directions fallback."""
-        if not self.client or self.fast_scheduler:
+        if not self.client:
             return self._estimate_travel_time(origin, destination, mode)
         
         # If API is available and not in fast mode
@@ -112,44 +112,14 @@ class TravelService:
             return max(1, min(base, 60))
         except Exception:
             return 15
-            return 15
-
-        try:
-            api_mode = self._map_transport_mode(mode)
-            now = datetime.now()
-
-            # Normalize inputs
-            norm_origin = self._normalize_address(origin)
-            norm_destination = self._normalize_address(destination)
-            if not norm_origin or not norm_destination:
-                return 15
-            if norm_origin == norm_destination:
-                return 0
-
-            # Prefer Distance Matrix for robustness
-            dm = self.client.distance_matrix(origins=[norm_origin], destinations=[norm_destination], mode=api_mode, departure_time=now, region=self.default_region)
-            if dm and dm.get('rows') and dm['rows'][0].get('elements'):
-                el = dm['rows'][0]['elements'][0]
-                if el.get('status') == 'OK' and el.get('duration'):
-                    return int(el['duration']['value'] / 60)
-
-            # Fallback to Directions API
-            directions = self.client.directions(norm_origin, norm_destination, mode=api_mode, departure_time=now, region=self.default_region)
-            if directions and directions[0].get('legs'):
-                duration = directions[0]['legs'][0]['duration']['value']
-                return int(duration / 60)
-
-            return 15
-        except Exception as e:
-            # Reduce log noise but keep visibility
-            logger.warning(f"Error calculating travel time: {str(e)}")
-            return 15 
 
     def get_travel_time(self, origin: str, destination: str, mode: str = "driving", use_api: bool = True) -> int:
         """Cached travel time retrieval. When use_api is False or fast_scheduler is True, use heuristic."""
         try:
             api_mode = self._map_transport_mode(mode)
-            fast = (not use_api) or self.fast_scheduler or (not self.client)
+            # Compute fast mode dynamically per call (env override + instance flag + client availability)
+            fast_env = os.getenv("FAST_SCHEDULER", "true").strip().lower() in ("1","true","yes","y")
+            fast = (not use_api) or fast_env or (not self.client)
             key = (origin.strip().lower(), destination.strip().lower(), api_mode, 'fast' if fast else 'api')
             if key in self._cache:
                 return self._cache[key]

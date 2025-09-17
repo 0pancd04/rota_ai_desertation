@@ -12,6 +12,7 @@ class ServiceType(str, Enum):
     EXERCISE = "exercise"
     COMPANIONSHIP = "companionship"
     PERSONAL_CARE = "personal_care"
+    MEAL_PREP = "meal_prep"
 
 class VehicleType(str, Enum):
     CAR = "car"
@@ -65,6 +66,9 @@ class Employee(BaseModel):
     max_patients_per_day: int = Field(default=8, description="Maximum patients per day")
     current_assignments: int = Field(default=0, description="Current number of assignments")
     specializations: List[str] = Field(default=[], description="Employee specializations")
+    # New scheduling fields
+    RoleLevel: Optional[str] = Field(default=None, alias="RoleLevel")
+    weekly_capacity_minutes: Optional[int] = Field(default=None, alias="weekly_capacity_minutes")
 
 class Patient(BaseModel):
     PatientID: str = Field(..., alias="PatientID")
@@ -88,6 +92,15 @@ class Patient(BaseModel):
     SourceFilename: Optional[str] = Field(default=None, alias="SourceFilename")
     SourceUploadedAt: Optional[str] = Field(default=None, alias="SourceUploadedAt")
     UploadID: Optional[int] = Field(default=None, alias="UploadID")
+    # New support fields
+    SatSunSupport: Optional[str] = Field(default=None, alias="SatSunSupport")
+    DaysOfSupport: Optional[str] = Field(default=None, alias="DaysOfSupport")
+    PreferenceOfCarer: Optional[str] = Field(default=None, alias="PreferenceOfCarer")
+    RequiredCarerSupport: Optional[int] = Field(default=1, alias="RequiredCarerSupport")
+    MealPrepRequired: Optional[bool] = Field(default=None, alias="MealPrepRequired")
+    BreakfastTime: Optional[str] = Field(default=None, alias="BreakfastTime")
+    LunchTime: Optional[str] = Field(default=None, alias="LunchTime")
+    DinnerTime: Optional[str] = Field(default=None, alias="DinnerTime")
     
     # Derived fields for compatibility (computed properties)
     @property

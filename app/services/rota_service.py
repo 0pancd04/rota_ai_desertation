@@ -160,6 +160,17 @@ class RotaService:
         self.db_manager.log_operation("weekly_schedule", f"Starting weekly schedule generation (engine={engine})")
         try:
             if engine == "core":
+                # First create weekend grouped assignments according to weekend support rules
+                try:
+                    from datetime import date
+                    # Determine next Monday start
+                    today = date.today()
+                    days_ahead = (0 - today.weekday()) % 7
+                    week_start = today + timedelta(days=days_ahead)
+                    weekend_created = self.scheduler_core.generate_weekend_block(week_start)
+                    logger.info(f"Weekend grouped assignments created: {weekend_created}")
+                except Exception as e:
+                    logger.warning(f"Weekend grouping failed: {e}")
                 summary = self.scheduler_core.generate_weekly_rota()
                 logger.info(f"SchedulerCore summary: {summary}")
                 # Return DB rows with IDs

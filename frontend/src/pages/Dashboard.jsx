@@ -139,7 +139,8 @@ function Dashboard() {
           <button 
             onClick={async () => {
               try {
-                await generateWeeklyRota();
+                // Default: fast mode (internal estimates)
+                await generateWeeklyRota(true);
               } catch (error) {
                 console.error('Failed to generate weekly rota:', error);
               }
@@ -160,6 +161,34 @@ function Dashboard() {
               <>
                 <ClockIcon className="w-5 h-5 mr-2 flex-shrink-0" />
                 Generate Weekly Rota
+              </>
+            )}
+          </button>
+          <button 
+            onClick={async () => {
+              try {
+                // Use Google Maps API (requires backend key configured)
+                await generateWeeklyRota(false);
+              } catch (error) {
+                console.error('Failed to generate weekly rota (API mode):', error);
+              }
+            }}
+            disabled={getActiveTask('weekly_rota')}
+            className={`flex items-center justify-center px-4 py-3 rounded-lg transition-colors ${
+              getActiveTask('weekly_rota')
+                ? 'bg-gray-400 cursor-not-allowed'
+                : 'bg-indigo-600 hover:bg-indigo-700 text-white'
+            }`}
+          >
+            {getActiveTask('weekly_rota') ? (
+              <>
+                <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white mr-2"></div>
+                Generating (API)...
+              </>
+            ) : (
+              <>
+                <ClockIcon className="w-5 h-5 mr-2 flex-shrink-0" />
+                Generate with Google Maps
               </>
             )}
           </button>

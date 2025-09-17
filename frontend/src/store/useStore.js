@@ -294,10 +294,12 @@ const useStore = create((set, get) => ({
   },
 
   // Generate weekly rota with progress tracking
-  generateWeeklyRota: async () => {
+  generateWeeklyRota: async (fast = true) => {
     set({ loading: true, error: null });
     try {
-      const response = await axios.post(`${API_BASE_URL}/generate-weekly-rota`);
+      const response = await axios.post(`${API_BASE_URL}/generate-weekly-rota`, null, {
+        params: { engine: 'core', fast }
+      });
       
       if (response.data.success) {
         set({ 
