@@ -100,7 +100,11 @@ class DataProcessor:
                 self.data_loaded = True
                 logger.info(f"Loaded {len(self.employees)} employees and {len(self.patients)} patients from database")
             else:
-                logger.info("No existing data found in database")
+                # Ensure in-memory state reflects empty database
+                self.employees = []
+                self.patients = []
+                self.data_loaded = False
+                logger.info("No existing data found in database; in-memory data cleared")
         except Exception as e:
             logger.error(f"Error loading data from database: {str(e)}")
     

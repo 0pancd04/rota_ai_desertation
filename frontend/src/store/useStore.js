@@ -426,6 +426,8 @@ const useStore = create((set, get) => ({
     set({ loading: true, error: null });
     try {
       await axios.post(`${API_BASE_URL}/database/clear-employees`);
+      // Optimistically clear local state to avoid stale UI
+      set({ employees: [] });
       await get().fetchEmployees();
       set({ loading: false });
       return true;
@@ -438,6 +440,8 @@ const useStore = create((set, get) => ({
     set({ loading: true, error: null });
     try {
       await axios.post(`${API_BASE_URL}/database/clear-patients`);
+      // Optimistically clear local state to avoid stale UI
+      set({ patients: [] });
       await get().fetchPatients();
       set({ loading: false });
       return true;
@@ -450,6 +454,8 @@ const useStore = create((set, get) => ({
     set({ loading: true, error: null });
     try {
       await axios.post(`${API_BASE_URL}/database/clear-people`);
+      // Optimistically clear local state to avoid stale UI
+      set({ employees: [], patients: [] });
       await get().fetchEmployees();
       await get().fetchPatients();
       set({ loading: false });
