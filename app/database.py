@@ -1140,11 +1140,54 @@ class DatabaseManager:
                     if rr not in seen:
                         entry['reasons'].append(rr)
                         seen.add(rr)
-                # Context: prefer existing; if missing keys, extend
+                # Context merge with special handling for list fields
                 try:
-                    for k, v in (r.get('context') or {}).items():
-                        if k not in entry['context']:
-                            entry['context'][k] = v
+                    incoming_ctx = r.get('context') or {}
+                    existing_ctx = entry['context']
+                    # Merge generic scalar keys if missing
+                    for k, v in incoming_ctx.items():
+                        if k not in existing_ctx and not isinstance(v, list):
+                            existing_ctx[k] = v
+                    # Merge lists by de-duplicating
+                    def _merge_list(key: str, uniq_key_getter):
+                        inc = incoming_ctx.get(key) or []
+                        if not isinstance(inc, list):
+                            return
+                        ex = existing_ctx.get(key) or []
+                        existing_ctx[key] = _dedupe_objects(ex + inc, uniq_key_getter)
+                    def _dedupe_objects(items: List[Dict[str, Any]], key_fn):
+                        seen_keys = set()
+                        out = []
+                        for it in items:
+                            try:
+                                k = key_fn(it)
+                            except Exception:
+                                k = None
+                            key_tuple = tuple(k) if isinstance(k, (list, tuple)) else k
+                            if key_tuple in seen_keys:
+                                continue
+                            seen_keys.add(key_tuple)
+                            out.append(it)
+                        return out
+                    _merge_list('issues', lambda d: (d.get('type'), d.get('assignment_ids'), d.get('details')))
+                    _merge_list('attempts', lambda d: (
+                        d.get('employee_id'), d.get('patient_id'), d.get('service_type'), d.get('start_time'), d.get('end_time'),
+                        tuple(d.get('violations') or [])
+                    ))
+                    if isinstance(incoming_ctx.get('suggestions'), dict):
+                        ex_sug = existing_ctx.get('suggestions') or {}
+                        in_sug = incoming_ctx['suggestions']
+                        # potential_employees
+                        if isinstance(in_sug.get('potential_employees'), list):
+                            ex_list = ex_sug.get('potential_employees') or []
+                            merged = _dedupe_objects(ex_list + in_sug.get('potential_employees', []), lambda d: d.get('employee_id'))
+                            ex_sug['potential_employees'] = merged
+                        # potential_patients
+                        if isinstance(in_sug.get('potential_patients'), list):
+                            ex_list = ex_sug.get('potential_patients') or []
+                            merged = _dedupe_objects(ex_list + in_sug.get('potential_patients', []), lambda d: d.get('patient_id'))
+                            ex_sug['potential_patients'] = merged
+                        existing_ctx['suggestions'] = ex_sug
                 except Exception:
                     pass
         return list(aggregated.values())
@@ -1170,9 +1213,48 @@ class DatabaseManager:
                         entry['reasons'].append(rr)
                         seen.add(rr)
                 try:
-                    for k, v in (r.get('context') or {}).items():
-                        if k not in entry['context']:
-                            entry['context'][k] = v
+                    incoming_ctx = r.get('context') or {}
+                    existing_ctx = entry['context']
+                    for k, v in incoming_ctx.items():
+                        if k not in existing_ctx and not isinstance(v, list):
+                            existing_ctx[k] = v
+                    def _merge_list(key: str, uniq_key_getter):
+                        inc = incoming_ctx.get(key) or []
+                        if not isinstance(inc, list):
+                            return
+                        ex = existing_ctx.get(key) or []
+                        existing_ctx[key] = _dedupe_objects(ex + inc, uniq_key_getter)
+                    def _dedupe_objects(items: List[Dict[str, Any]], key_fn):
+                        seen_keys = set()
+                        out = []
+                        for it in items:
+                            try:
+                                k = key_fn(it)
+                            except Exception:
+                                k = None
+                            key_tuple = tuple(k) if isinstance(k, (list, tuple)) else k
+                            if key_tuple in seen_keys:
+                                continue
+                            seen_keys.add(key_tuple)
+                            out.append(it)
+                        return out
+                    _merge_list('issues', lambda d: (d.get('type'), d.get('assignment_ids'), d.get('details')))
+                    _merge_list('attempts', lambda d: (
+                        d.get('employee_id'), d.get('patient_id'), d.get('service_type'), d.get('start_time'), d.get('end_time'),
+                        tuple(d.get('violations') or [])
+                    ))
+                    if isinstance(incoming_ctx.get('suggestions'), dict):
+                        ex_sug = existing_ctx.get('suggestions') or {}
+                        in_sug = incoming_ctx['suggestions']
+                        if isinstance(in_sug.get('potential_employees'), list):
+                            ex_list = ex_sug.get('potential_employees') or []
+                            merged = _dedupe_objects(ex_list + in_sug.get('potential_employees', []), lambda d: d.get('employee_id'))
+                            ex_sug['potential_employees'] = merged
+                        if isinstance(in_sug.get('potential_patients'), list):
+                            ex_list = ex_sug.get('potential_patients') or []
+                            merged = _dedupe_objects(ex_list + in_sug.get('potential_patients', []), lambda d: d.get('patient_id'))
+                            ex_sug['potential_patients'] = merged
+                        existing_ctx['suggestions'] = ex_sug
                 except Exception:
                     pass
         return list(aggregated.values())

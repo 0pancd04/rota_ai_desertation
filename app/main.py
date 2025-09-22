@@ -99,6 +99,12 @@ class UnassignedSummarizeRequest(BaseModel):
     week_end: str
     regenerate: bool | None = False
 
+class UnassignedCommonIssuesRequest(BaseModel):
+    entity_type: str  # 'patient' | 'employee'
+    week_start: str
+    week_end: str
+    top_n: int | None = 5
+
 @app.get("/")
 async def root():
     return {"message": "AI Rota System for Healthcare is running - Development Mode Active!"}
@@ -752,6 +758,76 @@ async def summarize_unassigned(req: UnassignedSummarizeRequest):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error generating unassigned summary: {str(e)}")
+
+@app.post("/unassigned/common-issues")
+async def summarize_common_unassigned_issues(req: UnassignedCommonIssuesRequest):
+    """Summarize common unassigned issues across the requested entity type and week using OpenAI."""
+    try:
+        if req.entity_type not in ("patient", "employee"):
+            raise HTTPException(status_code=400, detail="Invalid entity_type")
+        # Collect weekly unassigned
+        if req.entity_type == 'patient':
+            rows = db_manager.get_unassigned_patients_for_week(req.week_start, req.week_end)
+        else:
+            rows = db_manager.get_unassigned_employees_for_week(req.week_start, req.week_end)
+        # Build frequency maps
+        reason_counts = {}
+        issue_counts = {}
+        rule_counts = {}
+        example_attempts = []
+        for r in rows:
+            for v in r.get('reasons', []) or []:
+                reason_counts[v] = reason_counts.get(v, 0) + 1
+            ctx = r.get('context') or {}
+            for it in (ctx.get('issues') or []):
+                t = (it.get('type') or 'issue')
+                issue_counts[t] = issue_counts.get(t, 0) + 1
+            for att in (ctx.get('attempts') or [])[:2]:
+                # collect a few example violations
+                example_attempts.append({
+                    "counterpart": att.get('employee_id') if req.entity_type == 'patient' else att.get('patient_id'),
+                    "service_type": att.get('service_type'),
+                    "time": f"{att.get('start_time')}→{att.get('end_time')}",
+                    "violations": att.get('violations') or []
+                })
+                for vv in att.get('violations') or []:
+                    rule_counts[vv] = rule_counts.get(vv, 0) + 1
+        # Top N
+        def top_items(d: dict, n: int):
+            return sorted(([{"key": k, "count": v} for k, v in d.items()]), key=lambda x: (-x['count'], x['key']))[:n]
+        top_n = req.top_n or 5
+        top_reasons = top_items(reason_counts, top_n)
+        top_issues = top_items(issue_counts, top_n)
+        top_rules = top_items(rule_counts, top_n)
+        # Prepare prompt for OpenAI
+        prompt = (
+            f"You are analyzing unassigned {req.entity_type}s for {req.week_start} to {req.week_end}.\n"
+            f"Top Reasons: {top_reasons}.\nTop Issues: {top_issues}.\nTop Violations/Rules: {top_rules}.\n"
+            f"Example Attempts (trimmed): {example_attempts[:10]}.\n"
+            "Summarize the common causes concisely (one paragraph), then provide 5 specific, actionable recommendations."
+        )
+        try:
+            resp = openai_service.client.chat.completions.create(
+                model=openai_service.model,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.2
+            )
+            text = resp.choices[0].message.content or ""
+        except Exception as e:
+            text = ""
+        return {
+            "entity_type": req.entity_type,
+            "week_start": req.week_start,
+            "week_end": req.week_end,
+            "top_reasons": top_reasons,
+            "top_issues": top_issues,
+            "top_rule_violations": top_rules,
+            "ai_summary": text
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error summarizing common issues: {e}")
 
 class UnassignedBulkSummarizeRequest(BaseModel):
     entity_type: str  # 'patient' | 'employee'

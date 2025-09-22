@@ -1151,3 +1151,171 @@ class SchedulerCore:
         return mapping.get(key, 5)
 
 
+
+    def run_post_generation_diagnostics(self, week_start_iso: str, week_end_iso: str, top_k: int = 5) -> Dict[str, int]:
+        """Enrich unassigned rows after weekly rota generation.
+
+        For each unassigned patient/employee in the given week range:
+        - Sample top_k counterpart candidates ranked by travel time
+        - Run validate_with_details for a representative timeslot in shift
+        - Append attempts and compact issues/suggestions context via log_unassigned
+
+        Returns simple counters for observability.
+        """
+        enriched_patients = 0
+        enriched_employees = 0
+        try:
+            # Patients
+            patient_rows = self.db_manager.get_unassigned_patients_for_week(week_start_iso, week_end_iso)
+            for row in patient_rows:
+                try:
+                    pid = row.get('patient_id')
+                    day_iso = row.get('date')
+                    pat = self.data_processor.get_patient_by_id(pid)
+                    if not pat:
+                        continue
+                    ctx = row.get('context') or {}
+                    # If attempts already present, skip heavy recompute
+                    if isinstance(ctx.get('attempts'), list) and len(ctx.get('attempts')) > 0:
+                        continue
+                    # Rank employees by travel time regardless of eligibility to expose why rules fail
+                    ranked: List[Tuple[int, Employee]] = []
+                    try:
+                        for emp in self.data_processor.employees:
+                            tmin = self._calc_travel_minutes(emp, pat)
+                            ranked.append((tmin, emp))
+                        ranked.sort(key=lambda x: x[0])
+                    except Exception:
+                        ranked = []
+                    attempts_p: List[Dict[str, Any]] = []
+                    potentials: List[Dict[str, Any]] = []
+                    for tmin, emp in ranked[:max(1, int(top_k))]:
+                        try:
+                            earliest, _latest = self._parse_shift(emp)
+                            # Representative window: shift start + travel, default duration for inferred service
+                            inferred_str = self._infer_service_type(pat)
+                            try:
+                                inferred_enum = ServiceType(inferred_str)
+                            except Exception:
+                                inferred_enum = ServiceType.PERSONAL_CARE
+                            base_dt = datetime.combine(datetime.fromisoformat(f"{day_iso}T00:00:00").date(), earliest)
+                            start_iso = (base_dt + timedelta(minutes=int(tmin))).replace(second=0, microsecond=0).isoformat()
+                            default_minutes = self.data_processor.get_default_service_duration(inferred_enum)
+                            end_iso = (datetime.fromisoformat(start_iso) + timedelta(minutes=int(default_minutes))).replace(second=0, microsecond=0).isoformat()
+                            viols = self.validator.validate_with_details(
+                                employee_id=emp.EmployeeID,
+                                patient_id=pid,
+                                service_type=inferred_enum,
+                                start_iso=start_iso,
+                                end_iso=end_iso,
+                                duration_minutes=int(default_minutes),
+                                allow_same_day_dup_for_meal_prep=(inferred_enum == ServiceType.MEAL_PREP),
+                            )
+                            attempts_p.append({
+                                "employee_id": emp.EmployeeID,
+                                "employee_name": getattr(emp, 'Name', emp.EmployeeID),
+                                "patient_id": pid,
+                                "patient_name": getattr(pat, 'PatientName', pid),
+                                "service_type": inferred_enum.value,
+                                "start_time": start_iso,
+                                "end_time": end_iso,
+                                "violations": list(viols),
+                            })
+                            potentials.append({
+                                "employee_id": emp.EmployeeID,
+                                "employee_name": getattr(emp, 'Name', emp.EmployeeID),
+                                "travel_minutes": int(tmin),
+                                "violation_count": len(viols),
+                            })
+                        except Exception:
+                            continue
+                    # Build compact issues (reuse helper) and attach suggestions
+                    issues = self._build_patient_issues(pid, day_iso, set(row.get('reasons') or []))
+                    diag_ctx = {
+                        "issues": issues,
+                        "attempts": attempts_p,
+                        "suggestions": {"potential_employees": potentials},
+                    }
+                    # Append-only log so weekly aggregator merges arrays
+                    self.db_manager.log_unassigned('patient', pid, day_iso, [], diag_ctx)
+                    enriched_patients += 1
+                except Exception:
+                    continue
+        except Exception:
+            pass
+        try:
+            # Employees
+            employee_rows = self.db_manager.get_unassigned_employees_for_week(week_start_iso, week_end_iso)
+            for row in employee_rows:
+                try:
+                    eid = row.get('employee_id')
+                    day_iso = row.get('date')
+                    emp = self.data_processor.get_employee_by_id(eid)
+                    if not emp:
+                        continue
+                    ctx = row.get('context') or {}
+                    if isinstance(ctx.get('attempts'), list) and len(ctx.get('attempts')) > 0:
+                        continue
+                    ranked: List[Tuple[int, Patient]] = []
+                    try:
+                        for pat in self.data_processor.patients:
+                            tmin = self._calc_travel_minutes(emp, pat)
+                            ranked.append((tmin, pat))
+                        ranked.sort(key=lambda x: x[0])
+                    except Exception:
+                        ranked = []
+                    attempts_e: List[Dict[str, Any]] = []
+                    potentials: List[Dict[str, Any]] = []
+                    for tmin, pat in ranked[:max(1, int(top_k))]:
+                        try:
+                            earliest, _latest = self._parse_shift(emp)
+                            inferred_str = self._infer_service_type(pat)
+                            try:
+                                inferred_enum = ServiceType(inferred_str)
+                            except Exception:
+                                inferred_enum = ServiceType.PERSONAL_CARE
+                            base_dt = datetime.combine(datetime.fromisoformat(f"{day_iso}T00:00:00").date(), earliest)
+                            start_iso = (base_dt + timedelta(minutes=int(tmin))).replace(second=0, microsecond=0).isoformat()
+                            default_minutes = self.data_processor.get_default_service_duration(inferred_enum)
+                            end_iso = (datetime.fromisoformat(start_iso) + timedelta(minutes=int(default_minutes))).replace(second=0, microsecond=0).isoformat()
+                            viols = self.validator.validate_with_details(
+                                employee_id=eid,
+                                patient_id=pat.PatientID,
+                                service_type=inferred_enum,
+                                start_iso=start_iso,
+                                end_iso=end_iso,
+                                duration_minutes=int(default_minutes),
+                                allow_same_day_dup_for_meal_prep=(inferred_enum == ServiceType.MEAL_PREP),
+                            )
+                            attempts_e.append({
+                                "employee_id": eid,
+                                "employee_name": getattr(emp, 'Name', eid),
+                                "patient_id": pat.PatientID,
+                                "patient_name": getattr(pat, 'PatientName', pat.PatientID),
+                                "service_type": inferred_enum.value,
+                                "start_time": start_iso,
+                                "end_time": end_iso,
+                                "violations": list(viols),
+                            })
+                            potentials.append({
+                                "patient_id": pat.PatientID,
+                                "patient_name": getattr(pat, 'PatientName', pat.PatientID),
+                                "travel_minutes": int(tmin),
+                                "violation_count": len(viols),
+                            })
+                        except Exception:
+                            continue
+                    issues = self._build_employee_issues(eid, day_iso, row.get('reasons') or [])
+                    diag_ctx = {
+                        "issues": issues,
+                        "attempts": attempts_e,
+                        "suggestions": {"potential_patients": potentials},
+                    }
+                    self.db_manager.log_unassigned('employee', eid, day_iso, [], diag_ctx)
+                    enriched_employees += 1
+                except Exception:
+                    continue
+        except Exception:
+            pass
+        return {"enriched_patients": enriched_patients, "enriched_employees": enriched_employees}
+

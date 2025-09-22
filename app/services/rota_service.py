@@ -536,6 +536,19 @@ class RotaService:
                 summary = self.scheduler_core.generate_weekly_rota()
                 logger.info(f"SchedulerCore summary: {summary}")
                 # Return DB rows with IDs
+                # Compute week bounds used for diagnostics
+                from datetime import date, time as dtime
+                today = date.today()
+                days_ahead = (0 - today.weekday()) % 7
+                week_start = today + timedelta(days=days_ahead)
+                week_start_iso = datetime.combine(week_start, dtime(0,0)).date().isoformat()
+                week_end_iso = (week_start + timedelta(days=6)).isoformat()
+                # Post-generation diagnostics: enrich unassigned with attempts/issues/suggestions
+                try:
+                    diag = self.scheduler_core.run_post_generation_diagnostics(week_start_iso, week_end_iso, top_k=5)
+                    logger.info(f"Post-generation diagnostics completed: {diag}")
+                except Exception as e:
+                    logger.warning(f"Diagnostics pipeline failed: {e}")
                 assignments = self.db_manager.get_assignments()
                 self.db_manager.log_operation("weekly_schedule", "Completed weekly schedule (core)", {"assignments_count": len(assignments)})
                 return assignments
