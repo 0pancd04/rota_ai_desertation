@@ -166,6 +166,15 @@ class DatabaseManager:
         
         self.conn.commit()
 
+        # Create helpful indices for performance and integrity checks
+        try:
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_assign_emp_time ON assignments(employee_id, start_time, end_time)')
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_assign_patient_time ON assignments(patient_id, start_time, end_time)')
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_assign_start_time ON assignments(start_time)')
+            self.conn.commit()
+        except Exception as e:
+            logger.warning(f"Index creation failed: {e}")
+
         # Ensure backward-compatible columns exist for source metadata
         try:
             self._ensure_column('employees', 'source_filename', 'TEXT')
@@ -371,7 +380,8 @@ class DatabaseManager:
         self.conn.commit()
         logger.info(f"Logged data upload: {filename} - {employees_count} employees, {patients_count} patients")
 
-    def log_assignment(self, assignment: Dict[str, Any]):
+    def log_assignment(self, assignment: Dict[str, Any]) -> int:
+        """Insert an assignment and return its row ID."""
         cursor = self.conn.cursor()
         cursor.execute('''
             INSERT INTO assignments (
@@ -395,7 +405,9 @@ class DatabaseManager:
             assignment.get('group_id')
         ))
         self.conn.commit()
-        logger.info(f"Logged assignment: {assignment['employee_id']} to {assignment['patient_id']}")
+        row_id = cursor.lastrowid
+        logger.info(f"Logged assignment: {assignment['employee_id']} to {assignment['patient_id']} (id={row_id})")
+        return row_id
 
     def log_operation(self, operation_type: str, description: str, details: Dict[str, Any] = None):
         cursor = self.conn.cursor()
@@ -774,6 +786,25 @@ class DatabaseManager:
             logger.error(f"Error checking employee-patient daily assignment ({employee_id}, {patient_id}): {e}")
             return False
 
+    def get_assignments_for_patient_on_date(self, patient_id: str, date_iso: str) -> List[Dict]:
+        """Return assignments for a patient on a date, sorted by start_time."""
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute(
+                """
+                SELECT * FROM assignments
+                WHERE patient_id = ?
+                  AND DATE(start_time) = DATE(?)
+                ORDER BY start_time ASC
+                """,
+                (patient_id, date_iso)
+            )
+            columns = [col[0] for col in cursor.description]
+            return [dict(zip(columns, row)) for row in cursor.fetchall()]
+        except Exception as e:
+            logger.error(f"Error fetching patient assignments for date: {e}")
+            return []
+
     def get_employee_assignments_for_date(self, employee_id: str, date_iso: str) -> List[Dict]:
         """Return assignments for an employee on a date, sorted by start_time."""
         try:
@@ -811,3 +842,81 @@ class DatabaseManager:
         except Exception as e:
             logger.error(f"Error fetching employee assignments for week: {e}")
             return []
+
+    def sum_employee_minutes_for_week(self, employee_id: str, week_start_iso: str, week_end_iso: str) -> int:
+        """Sum of assignment durations for employee across the given ISO week window."""
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute(
+                """
+                SELECT COALESCE(SUM(duration), 0) FROM assignments
+                WHERE employee_id = ?
+                  AND DATE(start_time) BETWEEN DATE(?) AND DATE(?)
+                """,
+                (employee_id, week_start_iso, week_end_iso)
+            )
+            row = cursor.fetchone()
+            return int(row[0]) if row and row[0] is not None else 0
+        except Exception as e:
+            logger.error(f"Error summing weekly minutes for {employee_id}: {e}")
+            return 0
+
+    def count_patient_overlaps(self, patient_id: str, start_iso: str, end_iso: str) -> int:
+        """Count concurrent assignments for a patient overlapping [start_iso, end_iso]."""
+        try:
+            from datetime import datetime
+            # Ensure proposed times are ISO parseable
+            try:
+                new_start = datetime.fromisoformat(start_iso)
+                new_end = datetime.fromisoformat(end_iso)
+            except Exception:
+                return 0
+            cursor = self.conn.cursor()
+            cursor.execute(
+                """
+                SELECT start_time, end_time FROM assignments
+                WHERE patient_id = ?
+                """,
+                (patient_id,)
+            )
+            rows = cursor.fetchall()
+            overlaps = 0
+            for st, en in rows:
+                if not st or not en:
+                    continue
+                try:
+                    est = datetime.fromisoformat(st)
+                    een = datetime.fromisoformat(en)
+                except Exception:
+                    continue
+                if not (een <= new_start or est >= new_end):
+                    overlaps += 1
+            return overlaps
+        except Exception as e:
+            logger.error(f"Error counting overlaps for patient {patient_id}: {e}")
+            return 0
+
+    # --- Simple transaction helpers ---
+    def begin_transaction(self):
+        try:
+            self.conn.execute('BEGIN')
+            return True
+        except Exception as e:
+            logger.error(f"BEGIN transaction failed: {e}")
+            return False
+
+    def commit(self):
+        try:
+            self.conn.commit()
+            return True
+        except Exception as e:
+            logger.error(f"COMMIT failed: {e}")
+            return False
+
+    def rollback(self):
+        try:
+            self.conn.rollback()
+            return True
+        except Exception as e:
+            logger.error(f"ROLLBACK failed: {e}")
+            return False

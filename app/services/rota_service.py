@@ -11,6 +11,7 @@ from ..models.schemas import (
 )
 from ..database import DatabaseManager
 from .scheduler_core import SchedulerCore
+from .assignment_validator import AssignmentValidator
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +22,8 @@ class RotaService:
         self.current_assignments: List[EmployeeAssignment] = []
         self.db_manager = db_manager
         self.travel_service = travel_service
-        self.scheduler_core = SchedulerCore(self.data_processor, self.travel_service, self.db_manager)
+        self.validator = AssignmentValidator(self.db_manager, self.data_processor)
+        self.scheduler_core = SchedulerCore(self.data_processor, self.travel_service, self.db_manager, self.validator)
         # Load existing assignments from database
         self._load_assignments_from_database()
     
@@ -74,6 +76,10 @@ class RotaService:
             patient = self.data_processor.get_patient_by_id(patient_id)
             if not patient:
                 raise Exception(f"Patient {patient_id} not found")
+            # DaysOfSupport prefilter (today unless preferred_time implies otherwise)
+            now_dt = datetime.now()
+            if not self._is_day_supported(getattr(patient, 'DaysOfSupport', ''), now_dt.date()):
+                raise Exception("Patient is not scheduled for support on this day (DaysOfSupport)")
             
             # Step 3: Map service type
             service_type = self._map_service_type(service_type_str)
@@ -86,6 +92,20 @@ class RotaService:
             
             # Step 5: Filter available employees based on current workload
             available_employees = self._filter_available_employees(qualified_employees)
+
+            # Pre-candidate gender preference filter (Rule 9)
+            try:
+                pref = (getattr(patient, 'PreferenceOfCarer', '') or '').strip().lower()
+                if pref in ('male', 'female'):
+                    available_employees = [
+                        emp for emp in available_employees
+                        if (getattr(emp.Gender, 'value', str(emp.Gender)).strip().lower() == pref)
+                    ]
+            except Exception:
+                pass
+
+            if not available_employees:
+                raise Exception("No employees available after applying gender preference filter")
             
             if not available_employees:
                 raise Exception("No employees available at this time")
@@ -102,6 +122,17 @@ class RotaService:
                 )
                 employee_travel_times[emp.EmployeeID] = travel_time
 
+            # Prefer lower travel and faster transport when ties (Car > PT > Bicycle > Walking)
+            def _tp(emp):
+                try:
+                    val = getattr(emp.TransportMode, 'value', str(emp.TransportMode))
+                    key = (val or '').strip().lower()
+                except Exception:
+                    key = ''
+                mapping = {'car': 0, 'public transport': 1, 'bicycle': 2, 'walking': 3}
+                return mapping.get(key, 5)
+            available_employees.sort(key=lambda e: (employee_travel_times.get(e.EmployeeID, 9999), _tp(e)))
+            
             # Enhanced context with more details
             context = {
                 "preferred_time": preferred_time,
@@ -115,11 +146,27 @@ class RotaService:
                 patient, available_employees, service_type, context
             )
             
+            # If meal prep service, create three aligned assignments (Rule 2)
+            is_meal_prep = (service_type == ServiceType.MEAL_PREP) or bool(getattr(patient, 'MealPrepRequired', False))
+            if is_meal_prep:
+                created = self._create_meal_prep_assignments(patient, available_employees, ai_result, preferred_time)
+                if not created:
+                    raise Exception("Could not schedule meal-prep visits for today")
+                # Log operation
+                self.db_manager.log_operation(
+                    operation_type="assignment_request",
+                    description=f"Processed meal-prep assignments for patient {patient_id}",
+                    details={"prompt": prompt, "service_type": service_type_str, "count": len(created)}
+                )
+                # Return earliest created assignment
+                return sorted(created, key=lambda a: a.start_time)[0]
+
             # Step 7: Create the assignment
             selected_employee = self.data_processor.get_employee_by_id(ai_result["employee_id"])
             if not selected_employee:
                 raise Exception("Selected employee not found")
-            
+
+            # Build initial assignment for selected employee
             assignment = self._create_assignment(
                 employee=selected_employee,
                 patient=patient,
@@ -127,10 +174,265 @@ class RotaService:
                 ai_result=ai_result,
                 preferred_time=preferred_time
             )
+            # Adjust to shift bounds and recompute travel for selected employee
+            try:
+                e, l = self._parse_shift_bounds(getattr(selected_employee, 'EarliestStart', ''), getattr(selected_employee, 'LatestEnd', ''))
+                base = datetime.fromisoformat(assignment.start_time)
+                shift_start = base.replace(hour=e.hour, minute=e.minute, second=0, microsecond=0)
+                shift_end = base.replace(hour=l.hour, minute=l.minute, second=0, microsecond=0)
+                if l <= e:
+                    shift_end = shift_end + timedelta(days=1)
+                start_dt = max(base, shift_start)
+                end_dt = start_dt + timedelta(minutes=max(30, int(assignment.estimated_duration)))
+                if end_dt > shift_end:
+                    fit = int((shift_end - start_dt).total_seconds() // 60)
+                    if fit < 30:
+                        # Will trigger fallback below via validator
+                        pass
+                    else:
+                        assignment.estimated_duration = fit
+                        end_dt = shift_end
+                assignment.start_time = start_dt.replace(second=0, microsecond=0).isoformat()
+                assignment.end_time = end_dt.replace(second=0, microsecond=0).isoformat()
+                # recompute travel time
+                assignment.travel_time = self._calc_travel_minutes(selected_employee, patient)
+            except Exception:
+                pass
+
+            # Pre-slot candidate times within shift bounds (non-meal services)
+            if service_type != ServiceType.MEAL_PREP:
+                try:
+                    base_duration = int(max(30, assignment.estimated_duration))
+                except Exception:
+                    base_duration = 30
+                slot = self._find_valid_timeslot(
+                    employee=selected_employee,
+                    patient=patient,
+                    service_type=service_type,
+                    preferred_time=preferred_time,
+                    duration_minutes=base_duration,
+                )
+                if slot is not None:
+                    st_iso, en_iso = slot
+                    assignment.start_time = st_iso
+                    assignment.end_time = en_iso
+                    try:
+                        assignment.estimated_duration = int((datetime.fromisoformat(en_iso) - datetime.fromisoformat(st_iso)).total_seconds() // 60)
+                    except Exception:
+                        pass
+                    assignment.travel_time = self._calc_travel_minutes(selected_employee, patient)
+
+            # DB-first validation before persisting
+            violations = self.validator.validate_proposed_assignment(
+                employee_id=assignment.employee_id,
+                patient_id=assignment.patient_id,
+                service_type=assignment.service_type,
+                start_iso=assignment.start_time,
+                end_iso=assignment.end_time,
+                duration_minutes=int(assignment.estimated_duration),
+                allow_same_day_dup_for_meal_prep=(assignment.service_type == ServiceType.MEAL_PREP)
+            )
+            if violations:
+                # Fallback: try next best employees by travel time
+                ranked = []
+                for emp_id, t in employee_travel_times.items():
+                    emp_obj = self.data_processor.get_employee_by_id(emp_id)
+                    if not emp_obj:
+                        continue
+                    ranked.append((t, _tp(emp_obj), emp_obj))
+                ranked.sort(key=lambda x: (x[0], x[1]))
+                chosen_assignment: Optional[EmployeeAssignment] = None
+                for _, _, emp in ranked:
+                    if not emp or emp.EmployeeID == selected_employee.EmployeeID:
+                        continue
+                    # Build candidate assignment
+                    cand = self._create_assignment(
+                        employee=emp,
+                        patient=patient,
+                        service_type=service_type,
+                        ai_result=ai_result,
+                        preferred_time=preferred_time
+                    )
+                    # Pre-slot candidate times within shift bounds for this employee
+                    try:
+                        base_duration2 = int(max(30, cand.estimated_duration))
+                    except Exception:
+                        base_duration2 = 30
+                    slot2 = self._find_valid_timeslot(
+                        employee=emp,
+                        patient=patient,
+                        service_type=service_type,
+                        preferred_time=preferred_time,
+                        duration_minutes=base_duration2,
+                    )
+                    if slot2 is not None:
+                        st2_iso, en2_iso = slot2
+                        cand.start_time = st2_iso
+                        cand.end_time = en2_iso
+                        try:
+                            cand.estimated_duration = int((datetime.fromisoformat(en2_iso) - datetime.fromisoformat(st2_iso)).total_seconds() // 60)
+                        except Exception:
+                            pass
+                        cand.travel_time = self._calc_travel_minutes(emp, patient)
+                    v2 = self.validator.validate_proposed_assignment(
+                        employee_id=cand.employee_id,
+                        patient_id=cand.patient_id,
+                        service_type=cand.service_type,
+                        start_iso=cand.start_time,
+                        end_iso=cand.end_time,
+                        duration_minutes=int(cand.estimated_duration),
+                        allow_same_day_dup_for_meal_prep=(cand.service_type == ServiceType.MEAL_PREP)
+                    )
+                    if not v2:
+                        chosen_assignment = cand
+                        selected_employee = emp
+                        break
+                if not chosen_assignment:
+                    raise Exception(f"Assignment violates rules: {', '.join(violations)}")
+                assignment = chosen_assignment
             
+            # Handle RequiredCarerSupport >= 2 (concurrent carers)
+            req_support = 1
+            try:
+                req_support = int(getattr(patient, 'RequiredCarerSupport', 1) or 1)
+            except Exception:
+                req_support = 1
+            if req_support >= 2:
+                # Choose a second employee for the same window
+                second: Optional[Employee] = None
+                ranked2 = []
+                for emp_id, t in employee_travel_times.items():
+                    if emp_id == selected_employee.EmployeeID:
+                        continue
+                    emp2 = self.data_processor.get_employee_by_id(emp_id)
+                    if not emp2:
+                        continue
+                    # prefer non-junior second carer and faster transport
+                    is_jun = 1 if (getattr(emp2, 'RoleLevel', '') or '').strip().lower() == 'junior' else 0
+                    ranked2.append((is_jun, t, _tp(emp2), emp2))
+                ranked2.sort(key=lambda x: (x[0], x[1], x[2]))
+                for _, _, _, emp2 in ranked2:
+                    if not emp2:
+                        continue
+                    v_second = self.validator.validate_proposed_assignment(
+                        employee_id=emp2.EmployeeID,
+                        patient_id=patient.PatientID,
+                        service_type=service_type,
+                        start_iso=assignment.start_time,
+                        end_iso=assignment.end_time,
+                        duration_minutes=int(assignment.estimated_duration),
+                        allow_same_day_dup_for_meal_prep=(service_type == ServiceType.MEAL_PREP),
+                    )
+                    if not v_second:
+                        second = emp2
+                        break
+                if second is None:
+                    raise Exception("Unable to satisfy RequiredCarerSupport=2 for the requested time window")
+                # Persist both in a transaction
+                self.db_manager.begin_transaction()
+                try:
+                    aid1 = self.db_manager.log_assignment(assignment.dict())
+                    aid2 = self.db_manager.log_assignment({
+                        "employee_id": second.EmployeeID,
+                        "employee_name": second.Name,
+                        "patient_id": patient.PatientID,
+                        "patient_name": patient.PatientName,
+                        "service_type": service_type.value,
+                        "assigned_time": assignment.start_time,
+                        "start_time": assignment.start_time,
+                        "end_time": assignment.end_time,
+                        "estimated_duration": assignment.estimated_duration,
+                        "travel_time": self._calc_travel_minutes(second, patient),
+                        "priority_score": assignment.priority_score,
+                        "assignment_reason": assignment.assignment_reason,
+                    })
+                    self.db_manager.commit()
+                except Exception:
+                    self.db_manager.rollback()
+                    raise
+                # Update memory counts
+                try:
+                    ad = assignment.dict(); ad['id'] = aid1; assignment = EmployeeAssignment(**ad)
+                except Exception:
+                    pass
+                self.current_assignments.append(assignment)
+                selected_employee.current_assignments += 1
+                second.current_assignments += 1
+                logger.info(f"Assignments created (RCS=2): {selected_employee.Name} & {second.Name} -> {patient.PatientName} for {service_type.value}")
+                self.db_manager.log_operation(
+                    operation_type="assignment_request",
+                    description=f"Processed RCS=2 assignment for patient {patient_id}",
+                    details={"prompt": prompt, "service_type": service_type_str}
+                )
+                return assignment
+
+            # Junior pairing upgrade when RequiredCarerSupport == 1
+            selected_role = (getattr(selected_employee, 'RoleLevel', '') or '').strip().lower()
+            if req_support == 1 and selected_role == 'junior':
+                second: Optional[Employee] = None
+                ranked2 = []
+                for emp_id, t in employee_travel_times.items():
+                    if emp_id == selected_employee.EmployeeID:
+                        continue
+                    emp2 = self.data_processor.get_employee_by_id(emp_id)
+                    if not emp2:
+                        continue
+                    is_jun = 1 if (getattr(emp2, 'RoleLevel', '') or '').strip().lower() == 'junior' else 0
+                    ranked2.append((is_jun, t, _tp(emp2), emp2))
+                ranked2.sort(key=lambda x: (x[0], x[1], x[2]))
+                for _, _, _, emp2 in ranked2:
+                    v2 = self.validator.validate_proposed_assignment(
+                        employee_id=emp2.EmployeeID,
+                        patient_id=patient.PatientID,
+                        service_type=service_type,
+                        start_iso=assignment.start_time,
+                        end_iso=assignment.end_time,
+                        duration_minutes=int(assignment.estimated_duration),
+                        allow_same_day_dup_for_meal_prep=(service_type == ServiceType.MEAL_PREP),
+                    )
+                    if not v2:
+                        second = emp2
+                        break
+                if second is not None:
+                    # Persist both in a transaction (upgrade to concurrent pairing for learning)
+                    self.db_manager.begin_transaction()
+                    try:
+                        aid1 = self.db_manager.log_assignment(assignment.dict())
+                        aid2 = self.db_manager.log_assignment({
+                            "employee_id": second.EmployeeID,
+                            "employee_name": second.Name,
+                            "patient_id": patient.PatientID,
+                            "patient_name": patient.PatientName,
+                            "service_type": service_type.value,
+                            "assigned_time": assignment.start_time,
+                            "start_time": assignment.start_time,
+                            "end_time": assignment.end_time,
+                            "estimated_duration": assignment.estimated_duration,
+                            "travel_time": self._calc_travel_minutes(second, patient),
+                            "priority_score": assignment.priority_score,
+                            "assignment_reason": f"Paired with junior {selected_employee.Name} for learning",
+                        })
+                        self.db_manager.commit()
+                    except Exception:
+                        self.db_manager.rollback()
+                    else:
+                        try:
+                            ad = assignment.dict(); ad['id'] = aid1; assignment = EmployeeAssignment(**ad)
+                        except Exception:
+                            pass
+                        self.current_assignments.append(assignment)
+                        selected_employee.current_assignments += 1
+                        second.current_assignments += 1
+                        logger.info(f"Assignments created (Junior pairing): {selected_employee.Name} & {second.Name} -> {patient.PatientName} for {service_type.value}")
+                        self.db_manager.log_operation(
+                            operation_type="assignment_request",
+                            description=f"Processed junior pairing for patient {patient_id}",
+                            details={"prompt": prompt, "service_type": service_type_str}
+                        )
+                        return assignment
+
             # Step 8: Add to current assignments
             self.current_assignments.append(assignment)
-            
             # Step 9: Update employee's current assignment count
             selected_employee.current_assignments += 1
             
@@ -144,7 +446,13 @@ class RotaService:
             )
 
             # After creating assignment
-            self.db_manager.log_assignment(assignment.dict())
+            assignment_id = self.db_manager.log_assignment(assignment.dict())
+            try:
+                assignment_dict = assignment.dict()
+                assignment_dict['id'] = assignment_id
+                assignment = EmployeeAssignment(**assignment_dict)
+            except Exception:
+                pass
 
             return assignment
             
@@ -497,6 +805,250 @@ class RotaService:
                 return default
         return _parse(earliest, dtime(9,0)), _parse(latest, dtime(17,0))
 
+    def _parse_time_str(self, hhmm: Optional[str], default: Any = None):
+        try:
+            if not hhmm:
+                return default
+            parts = str(hhmm).strip().split(":")
+            h = int(parts[0])
+            m = int(parts[1]) if len(parts) > 1 else 0
+            return datetime.now().replace(hour=h, minute=m, second=0, microsecond=0)
+        except Exception:
+            return default
+
+    def _get_meal_windows(self, patient: Patient, day_date) -> List:
+        from datetime import time as dtime
+        windows = []
+        default_windows = [
+            (dtime(7, 0), dtime(9, 0)),
+            (dtime(12, 0), dtime(14, 0)),
+            (dtime(17, 0), dtime(19, 0)),
+        ]
+        bt = getattr(patient, 'BreakfastTime', None)
+        lt = getattr(patient, 'LunchTime', None)
+        dt = getattr(patient, 'DinnerTime', None)
+        def _parse_t(s, fallback):
+            try:
+                if not s:
+                    return None
+                parts = str(s).strip().split(":")
+                return dtime(int(parts[0]), int(parts[1]) if len(parts) > 1 else 0)
+            except Exception:
+                return None
+        custom = [_parse_t(bt, None), _parse_t(lt, None), _parse_t(dt, None)]
+        for idx, pair in enumerate(default_windows):
+            if custom[idx] is not None:
+                center = custom[idx]
+                start = datetime.combine(day_date, center) - timedelta(minutes=30)
+                end = datetime.combine(day_date, center) + timedelta(minutes=30)
+            else:
+                start = datetime.combine(day_date, pair[0])
+                end = datetime.combine(day_date, pair[1])
+            windows.append((start, end))
+        return windows
+
+    def _is_day_supported(self, days_str: Optional[str], on_date) -> bool:
+        try:
+            if not days_str:
+                return True
+            raw = (days_str or '').replace(' ', '')
+            tokens = [t.strip().lower() for t in raw.split(',') if t.strip() != '']
+            if not tokens:
+                return True
+            weekday = on_date.weekday()
+            name_map = {
+                0: ("m", "mon", "monday"),
+                1: ("t", "tu", "tue", "tues", "tuesday"),
+                2: ("w", "wed", "wednesday"),
+                3: ("th", "thu", "thurs", "thursday"),
+                4: ("f", "fri", "friday"),
+                5: ("sa", "sat", "saturday"),
+                6: ("su", "sun", "sunday"),
+            }
+            aliases = name_map.get(weekday, ())
+            return any(t in aliases for t in tokens)
+        except Exception:
+            return True
+
+    def _create_meal_prep_assignments(self, patient: Patient, available_employees: List[Employee], ai_result: Dict[str, Any], preferred_time: Optional[str]) -> List[EmployeeAssignment]:
+        # Determine day to schedule
+        now_dt = datetime.now()
+        if preferred_time:
+            try:
+                parts = preferred_time.strip().split(":")
+                now_dt = now_dt.replace(hour=int(parts[0]), minute=int(parts[1]) if len(parts) > 1 else 0, second=0, microsecond=0)
+            except Exception:
+                pass
+        day_date = now_dt.date()
+
+        # DaysOfSupport gating
+        if not self._is_day_supported(getattr(patient, 'DaysOfSupport', ''), now_dt.date()):
+            raise Exception("Patient is not scheduled for support on this day (DaysOfSupport)")
+
+        windows = self._get_meal_windows(patient, day_date)
+        created: List[EmployeeAssignment] = []
+
+        # Candidate employees sorted by travel time to patient
+        dest = f"{patient.Address}, {patient.PostCode}" if patient.PostCode and patient.PostCode not in patient.Address else patient.Address
+        ranked: List[tuple[int, Employee]] = []
+        for emp in available_employees:
+            origin = f"{emp.Address}, {emp.PostCode}" if emp.PostCode and emp.PostCode not in emp.Address else emp.Address
+            t = self.travel_service.get_travel_time(origin=origin, destination=dest, mode=emp.TransportMode.value)
+            ranked.append((t, emp))
+        ranked.sort(key=lambda x: x[0])
+
+        for ws, we in windows:
+            duration = 30
+            # iterate over employees to find a valid one
+            chosen: Optional[Employee] = None
+            chosen_travel = 0
+            start_iso = ws.replace(second=0, microsecond=0).isoformat()
+            end_iso = (ws + timedelta(minutes=duration)).replace(second=0, microsecond=0).isoformat()
+            for tmin, emp in ranked:
+                violations = self.validator.validate_proposed_assignment(
+                    employee_id=emp.EmployeeID,
+                    patient_id=patient.PatientID,
+                    service_type=ServiceType.MEAL_PREP,
+                    start_iso=start_iso,
+                    end_iso=end_iso,
+                    duration_minutes=duration,
+                    allow_same_day_dup_for_meal_prep=True,
+                )
+                if not violations:
+                    chosen = emp
+                    chosen_travel = tmin
+                    break
+            if not chosen:
+                # skip this window if no valid employee
+                continue
+            # Handle RequiredCarerSupport >= 2
+            try:
+                req_support = int(getattr(patient, 'RequiredCarerSupport', 1) or 1)
+            except Exception:
+                req_support = 1
+
+            if req_support >= 2:
+                # find a second distinct employee
+                second: Optional[Employee] = None
+                second_travel = 0
+                for tmin2, emp2 in ranked:
+                    if not emp2 or emp2.EmployeeID == chosen.EmployeeID:
+                        continue
+                    v2 = self.validator.validate_proposed_assignment(
+                        employee_id=emp2.EmployeeID,
+                        patient_id=patient.PatientID,
+                        service_type=ServiceType.MEAL_PREP,
+                        start_iso=start_iso,
+                        end_iso=end_iso,
+                        duration_minutes=duration,
+                        allow_same_day_dup_for_meal_prep=True,
+                    )
+                    if not v2:
+                        second = emp2
+                        second_travel = tmin2
+                        break
+                if not second:
+                    # cannot satisfy concurrency on this window; skip window
+                    continue
+                # Transactionally persist both
+                self.db_manager.begin_transaction()
+                try:
+                    id1 = self.db_manager.log_assignment({
+                        "employee_id": chosen.EmployeeID,
+                        "employee_name": chosen.Name,
+                        "patient_id": patient.PatientID,
+                        "patient_name": patient.PatientName,
+                        "service_type": ServiceType.MEAL_PREP.value,
+                        "assigned_time": start_iso,
+                        "start_time": start_iso,
+                        "end_time": end_iso,
+                        "estimated_duration": duration,
+                        "travel_time": chosen_travel,
+                        "priority_score": float(ai_result.get("priority_score", 5.0) or 5.0),
+                        "assignment_reason": ai_result.get("reasoning", "Meal prep (ad-hoc)"),
+                    })
+                    id2 = self.db_manager.log_assignment({
+                        "employee_id": second.EmployeeID,
+                        "employee_name": second.Name,
+                        "patient_id": patient.PatientID,
+                        "patient_name": patient.PatientName,
+                        "service_type": ServiceType.MEAL_PREP.value,
+                        "assigned_time": start_iso,
+                        "start_time": start_iso,
+                        "end_time": end_iso,
+                        "estimated_duration": duration,
+                        "travel_time": second_travel,
+                        "priority_score": float(ai_result.get("priority_score", 5.0) or 5.0),
+                        "assignment_reason": ai_result.get("reasoning", "Meal prep (ad-hoc)"),
+                    })
+                    self.db_manager.commit()
+                except Exception:
+                    self.db_manager.rollback()
+                    continue
+                created.append(EmployeeAssignment(
+                    id=id1,
+                    employee_id=chosen.EmployeeID,
+                    employee_name=chosen.Name,
+                    patient_id=patient.PatientID,
+                    patient_name=patient.PatientName,
+                    service_type=ServiceType.MEAL_PREP,
+                    assigned_time=start_iso,
+                    estimated_duration=duration,
+                    travel_time=chosen_travel,
+                    start_time=start_iso,
+                    end_time=end_iso,
+                    priority_score=float(ai_result.get("priority_score", 5.0) or 5.0),
+                    assignment_reason=ai_result.get("reasoning", "Meal prep (ad-hoc)")
+                ))
+                created.append(EmployeeAssignment(
+                    id=id2,
+                    employee_id=second.EmployeeID,
+                    employee_name=second.Name,
+                    patient_id=patient.PatientID,
+                    patient_name=patient.PatientName,
+                    service_type=ServiceType.MEAL_PREP,
+                    assigned_time=start_iso,
+                    estimated_duration=duration,
+                    travel_time=second_travel,
+                    start_time=start_iso,
+                    end_time=end_iso,
+                    priority_score=float(ai_result.get("priority_score", 5.0) or 5.0),
+                    assignment_reason=ai_result.get("reasoning", "Meal prep (ad-hoc)")
+                ))
+            else:
+                # Persist and build model (single)
+                id1 = self.db_manager.log_assignment({
+                    "employee_id": chosen.EmployeeID,
+                    "employee_name": chosen.Name,
+                    "patient_id": patient.PatientID,
+                    "patient_name": patient.PatientName,
+                    "service_type": ServiceType.MEAL_PREP.value,
+                    "assigned_time": start_iso,
+                    "start_time": start_iso,
+                    "end_time": end_iso,
+                    "estimated_duration": duration,
+                    "travel_time": chosen_travel,
+                    "priority_score": float(ai_result.get("priority_score", 5.0) or 5.0),
+                    "assignment_reason": ai_result.get("reasoning", "Meal prep (ad-hoc)"),
+                })
+                created.append(EmployeeAssignment(
+                    id=id1,
+                    employee_id=chosen.EmployeeID,
+                    employee_name=chosen.Name,
+                    patient_id=patient.PatientID,
+                    patient_name=patient.PatientName,
+                    service_type=ServiceType.MEAL_PREP,
+                    assigned_time=start_iso,
+                    estimated_duration=duration,
+                    travel_time=chosen_travel,
+                    start_time=start_iso,
+                    end_time=end_iso,
+                    priority_score=float(ai_result.get("priority_score", 5.0) or 5.0),
+                    assignment_reason=ai_result.get("reasoning", "Meal prep (ad-hoc)")
+                ))
+
+        return created
+
     def _in_shift(self, employee: Employee, start_iso: str, end_iso: str) -> bool:
         try:
             start_dt = datetime.fromisoformat(start_iso)
@@ -529,6 +1081,61 @@ class RotaService:
             return None
         scored.sort()
         return scored[0][2]
+
+    def _find_valid_timeslot(
+        self,
+        employee: Employee,
+        patient: Patient,
+        service_type: ServiceType,
+        preferred_time: Optional[str],
+        duration_minutes: int,
+        step_minutes: int = 15,
+    ) -> Optional[tuple[str, str]]:
+        """Scan within shift bounds to find the first valid timeslot that passes DB validator.
+
+        Returns a tuple of (start_iso, end_iso) or None if none found.
+        """
+        try:
+            now_dt = datetime.now()
+            # Determine base candidate start from preferred_time or now+1h
+            if preferred_time:
+                try:
+                    parts = preferred_time.strip().split(":")
+                    base_dt = now_dt.replace(hour=int(parts[0]), minute=int(parts[1]) if len(parts) > 1 else 0, second=0, microsecond=0)
+                except Exception:
+                    base_dt = now_dt + timedelta(hours=1)
+            else:
+                base_dt = now_dt + timedelta(hours=1)
+
+            e, l = self._parse_shift_bounds(getattr(employee, 'EarliestStart', ''), getattr(employee, 'LatestEnd', ''))
+            shift_start = base_dt.replace(hour=e.hour, minute=e.minute, second=0, microsecond=0)
+            shift_end = base_dt.replace(hour=l.hour, minute=l.minute, second=0, microsecond=0)
+            if l <= e:
+                shift_end = shift_end + timedelta(days=1)
+
+            cursor = max(base_dt, shift_start)
+            # Clamp duration
+            duration_minutes = max(30, int(duration_minutes))
+            allow_dup_meal = (service_type == ServiceType.MEAL_PREP)
+
+            while cursor + timedelta(minutes=duration_minutes) <= shift_end:
+                st = cursor.replace(second=0, microsecond=0)
+                en = st + timedelta(minutes=duration_minutes)
+                violations = self.validator.validate_proposed_assignment(
+                    employee_id=employee.EmployeeID,
+                    patient_id=patient.PatientID,
+                    service_type=service_type,
+                    start_iso=st.isoformat(),
+                    end_iso=en.isoformat(),
+                    duration_minutes=duration_minutes,
+                    allow_same_day_dup_for_meal_prep=allow_dup_meal,
+                )
+                if not violations:
+                    return st.isoformat(), en.isoformat()
+                cursor = cursor + timedelta(minutes=step_minutes)
+        except Exception:
+            return None
+        return None
 
     def _get_candidate_employees(self, start_iso: str, end_iso: str, current_employee_id: str) -> List[Employee]:
         candidates: List[Employee] = []

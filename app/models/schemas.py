@@ -135,6 +135,7 @@ class Patient(BaseModel):
         return 1
 
 class EmployeeAssignment(BaseModel):
+    id: Optional[int] = None
     employee_id: str
     employee_name: str
     patient_id: str
