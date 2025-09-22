@@ -843,6 +843,24 @@ class DatabaseManager:
             logger.error(f"Error fetching employee assignments for week: {e}")
             return []
 
+    def get_assignments_for_week(self, start_date_iso: str, end_date_iso: str) -> List[Dict]:
+        """Return all assignments in [start_date, end_date], sorted by start_time."""
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute(
+                """
+                SELECT * FROM assignments
+                WHERE DATE(start_time) BETWEEN DATE(?) AND DATE(?)
+                ORDER BY start_time ASC
+                """,
+                (start_date_iso, end_date_iso)
+            )
+            columns = [col[0] for col in cursor.description]
+            return [dict(zip(columns, row)) for row in cursor.fetchall()]
+        except Exception as e:
+            logger.error(f"Error fetching assignments for week: {e}")
+            return []
+
     def sum_employee_minutes_for_week(self, employee_id: str, week_start_iso: str, week_end_iso: str) -> int:
         """Sum of assignment durations for employee across the given ISO week window."""
         try:

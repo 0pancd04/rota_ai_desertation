@@ -9,6 +9,7 @@ import Assignments from './pages/Assignments';
 import AssignmentOverview from './pages/AssignmentOverview';
 import Stats from './pages/Stats';
 import CreateAssignment from './pages/CreateAssignment';
+import Timeline from './pages/Timeline';
 import { ProgressProvider, useProgress } from './contexts/ProgressContext';
 import ProgressIndicator from './components/ProgressIndicator';
 import NotificationTray from './components/NotificationTray';
@@ -25,6 +26,7 @@ import {
 
 function AppContent() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const location = useLocation();
   const navigate = useNavigate();
   const { 
@@ -75,6 +77,12 @@ function AppContent() {
       href: '/assignment-overview', 
       icon: ClipboardDocumentListIcon,
       current: location.pathname === '/assignment-overview'
+    },
+    { 
+      name: 'Timeline', 
+      href: '/timeline', 
+      icon: ClipboardDocumentListIcon,
+      current: location.pathname === '/timeline'
     },
     { 
       name: 'Stats', 
@@ -153,46 +161,48 @@ function AppContent() {
       )}
 
       {/* Desktop sidebar */}
-      <div className="hidden lg:fixed lg:inset-y-0 lg:flex lg:w-64 lg:flex-col">
-        <div className="flex flex-col flex-grow bg-white shadow-sm border-r border-gray-200">
-          <div className="flex h-16 items-center px-6 border-b border-gray-200">
-            <button 
-              onClick={handleLogoClick}
-              className="flex items-center space-x-3 hover:opacity-80 transition-opacity duration-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 rounded-lg p-1"
-            >
-              <div className="w-9 h-9 bg-gradient-to-br from-gray-100 to-gray-200 rounded-lg flex items-center justify-center shadow-sm shadow-gray-300 hover:shadow-md hover:shadow-gray-400 transition-all duration-200 transform hover:scale-105">
-                <img
-                  src="/ai_rota__favicon.svg"
-                  alt="Healthcare Rota Logo"
-                  className="w-8 h-8"
-                />
-              </div>
-              <span className="text-lg font-semibold text-gray-900 hover:text-blue-600 transition-colors duration-200">Healthcare Rota</span>
-            </button>
-          </div>
-          <nav className="flex-1 space-y-1 px-4 py-4">
-            {navigation.map((item) => (
-              <button
-                key={item.name}
-                onClick={() => handleNavigation(item.href)}
-                className={`group flex items-center w-full px-3 py-2 text-sm font-medium rounded-lg transition-colors ${
-                  item.current
-                    ? 'bg-blue-50 text-blue-700'
-                    : 'text-gray-700 hover:bg-gray-50 hover:text-gray-900'
-                }`}
+      {!sidebarCollapsed && (
+        <div className="hidden lg:fixed lg:inset-y-0 lg:flex lg:w-64 lg:flex-col">
+          <div className="flex flex-col flex-grow bg-white shadow-sm border-r border-gray-200">
+            <div className="flex h-16 items-center px-6 border-b border-gray-200">
+              <button 
+                onClick={handleLogoClick}
+                className="flex items-center space-x-3 hover:opacity-80 transition-opacity duration-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 rounded-lg p-1"
               >
-                <item.icon className={`w-5 h-5 mr-3 flex-shrink-0 ${
-                  item.current ? 'text-blue-600' : 'text-gray-400 group-hover:text-gray-500'
-                }`} />
-                {item.name}
+                <div className="w-9 h-9 bg-gradient-to-br from-gray-100 to-gray-200 rounded-lg flex items-center justify-center shadow-sm shadow-gray-300 hover:shadow-md hover:shadow-gray-400 transition-all duration-200 transform hover:scale-105">
+                  <img
+                    src="/ai_rota__favicon.svg"
+                    alt="Healthcare Rota Logo"
+                    className="w-8 h-8"
+                  />
+                </div>
+                <span className="text-lg font-semibold text-gray-900 hover:text-blue-600 transition-colors duration-200">Healthcare Rota</span>
               </button>
-            ))}
-          </nav>
+            </div>
+            <nav className="flex-1 space-y-1 px-4 py-4">
+              {navigation.map((item) => (
+                <button
+                  key={item.name}
+                  onClick={() => handleNavigation(item.href)}
+                  className={`group flex items-center w-full px-3 py-2 text-sm font-medium rounded-lg transition-colors ${
+                    item.current
+                      ? 'bg-blue-50 text-blue-700'
+                      : 'text-gray-700 hover:bg-gray-50 hover:text-gray-900'
+                  }`}
+                >
+                  <item.icon className={`w-5 h-5 mr-3 flex-shrink-0 ${
+                    item.current ? 'text-blue-600' : 'text-gray-400 group-hover:text-gray-500'
+                  }`} />
+                  {item.name}
+                </button>
+              ))}
+            </nav>
+          </div>
         </div>
-      </div>
+      )}
 
       {/* Main content */}
-      <div className="lg:pl-64">
+      <div className={`${sidebarCollapsed ? 'lg:pl-0' : 'lg:pl-64'}`}>
         {/* Top bar */}
         <div className="sticky top-0 z-40 bg-white shadow-sm border-b border-gray-200">
           <div className="flex h-16 items-center justify-between px-4 sm:px-6 lg:px-8">
@@ -202,6 +212,13 @@ function AppContent() {
                 className="lg:hidden text-gray-500 hover:text-gray-700 w-6 h-6 flex-shrink-0"
               >
                 <Bars3Icon className="w-6 h-6" />
+              </button>
+              <button
+                onClick={() => setSidebarCollapsed(v => !v)}
+                className="hidden lg:inline-flex text-gray-500 hover:text-gray-700 w-6 h-6 flex-shrink-0"
+                title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+              >
+                {sidebarCollapsed ? <Bars3Icon className="w-6 h-6" /> : <XMarkIcon className="w-6 h-6" />}
               </button>
               <h1 className="text-xl font-semibold text-gray-900">
                 {navigation.find(item => item.href === location.pathname)?.name || 'Dashboard'}
@@ -231,7 +248,7 @@ function AppContent() {
 
         {/* Page content */}
         <main className="py-8">
-          <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
+          <div className={`mx-auto ${location.pathname === '/timeline' ? 'max-w-none px-2 sm:px-3 lg:px-4' : 'max-w-7xl px-4 sm:px-6 lg:px-8'}`}>
             <Routes>
               <Route path="/" element={<Dashboard />} />
               <Route path="/upload" element={<DataUpload />} />
@@ -239,6 +256,7 @@ function AppContent() {
               <Route path="/patients" element={<Patients />} />
               <Route path="/assignments" element={<Assignments />} />
               <Route path="/assignment-overview" element={<AssignmentOverview />} />
+              <Route path="/timeline" element={<Timeline />} />
               <Route path="/stats" element={<Stats />} />
               <Route path="/create-assignment" element={<CreateAssignment />} />
             </Routes>

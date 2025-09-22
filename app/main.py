@@ -83,6 +83,10 @@ class ReanalyzeRequest(BaseModel):
     assignment_ids: List[int]
     allow_time_change: bool = False
 
+class WeekRange(BaseModel):
+    week_start: str
+    week_end: str
+
 @app.get("/")
 async def root():
     return {"message": "AI Rota System for Healthcare is running - Development Mode Active!"}
@@ -592,6 +596,84 @@ async def get_employee_week_assignments(req: EmployeeWeekRequest):
         return {"assignments": data}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error fetching employee weekly assignments: {str(e)}")
+
+@app.post("/assignments/week")
+async def get_week_assignments(req: WeekRange):
+    """Get all assignments across a week for grid view."""
+    try:
+        data = db_manager.get_assignments_for_week(req.week_start, req.week_end)
+        return {"assignments": data}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error fetching weekly assignments: {str(e)}")
+
+@app.post("/employees/weekly-summary")
+async def get_employees_weekly_summary(req: WeekRange):
+    """Return employees with weekly used minutes and remaining capacity for the week."""
+    try:
+        employees = data_processor.get_employees()  # list of dicts
+        summary = []
+        for emp in employees:
+            # Dict keys are Pydantic field names: 'EmployeeID', 'Name', 'TransportMode', etc.
+            emp_id = emp.get('EmployeeID')
+            used = db_manager.sum_employee_minutes_for_week(emp_id, req.week_start, req.week_end)
+            role_level = emp.get('RoleLevel')
+            cap = emp.get('weekly_capacity_minutes')
+            if isinstance(cap, int) and cap > 0:
+                capacity = cap
+            else:
+                rl = (role_level or '').strip().lower()
+                capacity = 1200 if rl == 'junior' else 2160
+
+            # Enums may be present; coerce to string values when possible
+            def enum_val(v):
+                try:
+                    return v.value
+                except Exception:
+                    return v
+
+            summary.append({
+                "employee_id": emp_id,
+                "name": emp.get('Name'),
+                "gender": enum_val(emp.get('Gender')),
+                "qualification": enum_val(emp.get('Qualification')),
+                "role_level": role_level,
+                "transport_mode": enum_val(emp.get('TransportMode')),
+                "languages": emp.get('LanguageSpoken', ''),
+                "address": emp.get('Address'),
+                "postcode": emp.get('PostCode'),
+                "earliest_start": emp.get('EarliestStart'),
+                "latest_end": emp.get('LatestEnd'),
+                "weekly_capacity_minutes": capacity,
+                "used_minutes": used,
+                "remaining_minutes": max(0, capacity - used),
+            })
+        return {"employees": summary}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error fetching employees weekly summary: {str(e)}")
+
+@app.get("/patients/details/{patient_id}")
+async def get_patient_details(patient_id: str):
+    try:
+        pat = data_processor.get_patient_by_id(patient_id)
+        if not pat:
+            raise HTTPException(status_code=404, detail="Patient not found")
+        return pat.dict(by_alias=True)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error fetching patient: {str(e)}")
+
+@app.get("/employees/details/{employee_id}")
+async def get_employee_details(employee_id: str):
+    try:
+        emp = data_processor.get_employee_by_id(employee_id)
+        if not emp:
+            raise HTTPException(status_code=404, detail="Employee not found")
+        return emp.dict(by_alias=True)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error fetching employee: {str(e)}")
 
 @app.post("/assignments/reanalyze")
 async def reanalyze_assignments(req: ReanalyzeRequest):
