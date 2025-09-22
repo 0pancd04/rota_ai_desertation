@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, date, time as dtime
 from typing import Dict, List, Optional, Tuple
 import logging
+import re
 
 from .data_processor import DataProcessor
 from .travel_service import TravelService
@@ -401,7 +402,8 @@ class SchedulerCore:
 
                 # Validate with shared validator
                 allow_dup_meal = is_meal
-                violations = self.validator.validate_proposed_assignment(
+                # Detailed validation to capture overlapping assignment IDs, caps, etc.
+                violations = self.validator.validate_with_details(
                     employee_id=employee.EmployeeID,
                     patient_id=chosen_patient.PatientID,
                     service_type=inferred_enum,
@@ -411,6 +413,16 @@ class SchedulerCore:
                     allow_same_day_dup_for_meal_prep=allow_dup_meal,
                 )
                 if violations:
+                    # Always record detailed violations for the chosen patient attempt
+                    try:
+                        s = patient_reasons.get(chosen_patient.PatientID)
+                        if s is None:
+                            s = set()
+                            patient_reasons[chosen_patient.PatientID] = s
+                        for v in violations:
+                            s.add(v)
+                    except Exception:
+                        pass
                     # Try next candidate patient if possible
                     next_candidate = None
                     for p2, tmin in candidates[1:]:
@@ -426,16 +438,6 @@ class SchedulerCore:
                         continue
                     # otherwise nudge time and retry
                     current_time = current_time + timedelta(minutes=5)
-                    # Record reasons for the chosen patient at this attempted window
-                    try:
-                        s = patient_reasons.get(chosen_patient.PatientID)
-                        if s is None:
-                            s = set()
-                            patient_reasons[chosen_patient.PatientID] = s
-                        for v in violations:
-                            s.add(v)
-                    except Exception:
-                        pass
                     continue
 
                 # Weekly capacity tracking in-memory to avoid overscheduling beyond cap in this run
@@ -581,6 +583,7 @@ class SchedulerCore:
                         "transport_mode": getattr(employee, 'TransportMode', None).value if getattr(employee, 'TransportMode', None) else None,
                         "earliest_start": getattr(employee, 'EarliestStart', None),
                         "latest_end": getattr(employee, 'LatestEnd', None),
+                        "issues": self._build_employee_issues(employee.EmployeeID, day_date.isoformat(), emp_reasons),
                     }
                     self.db_manager.log_unassigned('employee', employee.EmployeeID, day_date.isoformat(), emp_reasons or ["No feasible assignments found"], ctx)
             except Exception:
@@ -601,6 +604,7 @@ class SchedulerCore:
                     reason_set = set(base_reasons)
                     for r in extra:
                         reason_set.add(r)
+                    # Build richer context with inline issues for verification
                     ctx = {
                         "required_support": getattr(patient, 'RequiredSupport', None),
                         "required_hours_per_week": getattr(patient, 'RequiredHoursOfSupport', None),
@@ -610,6 +614,8 @@ class SchedulerCore:
                         "meal_prep_required": bool(getattr(patient, 'MealPrepRequired', False)),
                         "days_of_support": getattr(patient, 'DaysOfSupport', None),
                         "sat_sun_support": getattr(patient, 'SatSunSupport', None),
+                        # Inline verification artifacts: show overlapping rows and reasons
+                        "issues": self._build_patient_issues(patient.PatientID, day_date.isoformat(), reason_set)
                     }
                     self.db_manager.log_unassigned('patient', patient.PatientID, day_date.isoformat(), list(reason_set) or ["No feasible employee/time window found"], ctx)
         except Exception:
@@ -701,6 +707,115 @@ class SchedulerCore:
         except Exception:
             reasons = ["No feasible employee/time window found"]
         return reasons
+
+    def _build_patient_issues(self, patient_id: str, date_iso: str, reasons: set[str]) -> List[Dict[str, str]]:
+        """Construct a compact issues list with verification artifacts for the unassigned record.
+
+        Each issue is a dict with keys such as 'type', 'details', and optionally 'assignment_ids'.
+        """
+        issues: List[Dict[str, str]] = []
+        # If any reason references concurrency or overlap, attach overlapping patient assignments that day
+        try:
+            # Build a representative window for the day to scan overlaps: 00:00 to 23:59
+            start_iso = f"{date_iso}T00:00:00"
+            end_iso = f"{date_iso}T23:59:00"
+            overlaps = self.db_manager.get_overlapping_assignments_for_patient(patient_id, start_iso, end_iso)
+            if overlaps:
+                ids = [str(r.get('id')) for r in overlaps]
+                details = ", ".join([f"#{r.get('id')} {r.get('start_time')}→{r.get('end_time')} (emp {r.get('employee_id')})" for r in overlaps[:6]])
+                issues.append({
+                    "type": "patient_overlaps",
+                    "assignment_ids": ",".join(ids),
+                    "details": f"Existing overlapping assignments that day: {details}"
+                })
+        except Exception:
+            pass
+        # Parse reasons to extract conflicting assignment IDs (from validator details)
+        try:
+            text_reasons = list(reasons or [])
+            id_set: set[str] = set()
+            for msg in text_reasons:
+                if not isinstance(msg, str):
+                    continue
+                for m in re.finditer(r"assignment\s*#(\d+)", msg.lower()):
+                    id_set.add(m.group(1))
+            if id_set:
+                details_parts: List[str] = []
+                for sid in list(id_set)[:6]:
+                    try:
+                        row = self.db_manager.get_assignment_by_id(int(sid))
+                        if row:
+                            details_parts.append(f"#{sid} {row.get('start_time')}→{row.get('end_time')} (emp {row.get('employee_id')})")
+                        else:
+                            details_parts.append(f"#{sid}")
+                    except Exception:
+                        details_parts.append(f"#{sid}")
+                issues.append({
+                    "type": "employee_overlaps",
+                    "assignment_ids": ",".join(sorted(id_set)),
+                    "details": ", ".join(details_parts)
+                })
+        except Exception:
+            pass
+
+        # Echo raw reasons as separate entries for quick rendering
+        try:
+            for r in list(reasons or []):
+                issues.append({"type": "reason", "details": r})
+        except Exception:
+            pass
+        return issues
+
+    def _build_employee_issues(self, employee_id: str, date_iso: str, reasons: List[str]) -> List[Dict[str, str]]:
+        """Construct issues for an employee unassigned record.
+
+        Attaches same-day assignments for the employee and echoes reasons.
+        """
+        out: List[Dict[str, str]] = []
+        try:
+            rows = self.db_manager.get_employee_assignments_for_date(employee_id, date_iso)
+            if rows:
+                ids = [str(r.get('id')) for r in rows if r.get('id') is not None]
+                details = ", ".join([f"#{r.get('id')} {r.get('start_time')}→{r.get('end_time')} (pat {r.get('patient_id')})" for r in rows[:6]])
+                out.append({
+                    "type": "employee_same_day_assignments",
+                    "assignment_ids": ",".join(ids),
+                    "details": f"Existing assignments that day: {details}"
+                })
+        except Exception:
+            pass
+        # Parse reasons for explicit conflicting assignment references
+        try:
+            id_set: set[str] = set()
+            for msg in reasons or []:
+                if not isinstance(msg, str):
+                    continue
+                for m in re.finditer(r"assignment\s*#(\d+)", msg.lower()):
+                    id_set.add(m.group(1))
+            if id_set:
+                details_parts: List[str] = []
+                for sid in list(id_set)[:6]:
+                    try:
+                        row = self.db_manager.get_assignment_by_id(int(sid))
+                        if row:
+                            details_parts.append(f"#{sid} {row.get('start_time')}→{row.get('end_time')} (pat {row.get('patient_id')})")
+                        else:
+                            details_parts.append(f"#{sid}")
+                    except Exception:
+                        details_parts.append(f"#{sid}")
+                out.append({
+                    "type": "employee_overlaps",
+                    "assignment_ids": ",".join(sorted(id_set)),
+                    "details": ", ".join(details_parts)
+                })
+        except Exception:
+            pass
+        try:
+            for r in reasons or []:
+                out.append({"type": "reason", "details": r})
+        except Exception:
+            pass
+        return out
 
     def _diagnose_employee_unassigned(self, employee: Employee, day_date: date, patient_daily_minutes: Dict[str, int]) -> List[str]:
         reasons: List[str] = []

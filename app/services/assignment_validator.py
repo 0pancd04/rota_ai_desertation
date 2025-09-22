@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, date, time as dtime, timedelta
-from typing import List, Tuple, Optional, Union
+from typing import List, Tuple, Optional, Union, Dict
 
 from .data_processor import DataProcessor
 from ..database import DatabaseManager
@@ -102,6 +102,123 @@ class AssignmentValidator:
             violations.append("Patient concurrency limit exceeded (RequiredCarerSupport)")
 
         return violations
+
+    def validate_with_details(
+        self,
+        employee_id: str,
+        patient_id: str,
+        service_type: Union[ServiceType, str],
+        start_iso: str,
+        end_iso: str,
+        duration_minutes: int,
+        allow_same_day_dup_for_meal_prep: bool = False,
+    ) -> List[str]:
+        """Return detailed violation strings including IDs and context for verification."""
+        base = self.validate_proposed_assignment(
+            employee_id=employee_id,
+            patient_id=patient_id,
+            service_type=service_type,
+            start_iso=start_iso,
+            end_iso=end_iso,
+            duration_minutes=duration_minutes,
+            allow_same_day_dup_for_meal_prep=allow_same_day_dup_for_meal_prep,
+        )
+
+        detailed: List[str] = []
+
+        # Fetch models once
+        employee = self.dp.get_employee_by_id(employee_id)
+        patient = self.dp.get_patient_by_id(patient_id)
+        svc = service_type.value if isinstance(service_type, ServiceType) else str(service_type)
+        svc = (svc or '').strip().lower()
+
+        # Precompute helpful context
+        try:
+            wk_start, wk_end = self._week_bounds(datetime.fromisoformat(start_iso).date())
+            used = self.db.sum_employee_minutes_for_week(employee_id, wk_start.isoformat(), wk_end.isoformat())
+            cap = self._role_capacity_minutes(getattr(employee, 'RoleLevel', None), getattr(employee, 'weekly_capacity_minutes', None))
+        except Exception:
+            used, cap = 0, 0
+
+        for msg in base:
+            m = msg.lower()
+            if 'overlapping assignment' in m:
+                overlaps = self.db.get_overlapping_assignments_for_employee(employee_id, start_iso, end_iso)
+                if overlaps:
+                    for r in overlaps[:3]:  # limit fanout
+                        detailed.append(
+                            f"Employee has overlapping assignment: conflicts with assignment #{r.get('id')} "
+                            f"({r.get('start_time')}→{r.get('end_time')}, patient {r.get('patient_id')} {r.get('patient_name')})"
+                        )
+                else:
+                    detailed.append(msg)
+            elif 'already assigned to this patient today' in m:
+                same = self.db.get_employee_patient_assignments_on_date(employee_id, patient_id, start_iso)
+                if same:
+                    ids = [str(r.get('id')) for r in same]
+                    times = [f"{r.get('start_time')}→{r.get('end_time')}" for r in same]
+                    detailed.append(
+                        f"Duplicate employee↔patient on date: existing assignment(s) #{', '.join(ids)} at {', '.join(times)}"
+                    )
+                else:
+                    detailed.append(msg)
+            elif 'concurrency limit exceeded' in m:
+                try:
+                    overlaps = self.db.get_overlapping_assignments_for_patient(patient_id, start_iso, end_iso)
+                except Exception:
+                    overlaps = []
+                if overlaps:
+                    parts = []
+                    for r in overlaps[:4]:
+                        parts.append(
+                            f"#{r.get('id')} ({r.get('start_time')}→{r.get('end_time')}, emp {r.get('employee_id')} {r.get('employee_name')})"
+                        )
+                    detailed.append(
+                        f"Patient concurrency exceeded (RequiredCarerSupport): overlaps with {', '.join(parts)}"
+                    )
+                else:
+                    detailed.append(msg)
+            elif 'weekly capacity' in m:
+                detailed.append(
+                    f"Weekly capacity would be exceeded: used {used} min, requested {max(0, int(duration_minutes))} min, cap {cap} min"
+                )
+            elif 'outside employee shift bounds' in m:
+                try:
+                    e = getattr(employee, 'EarliestStart', None)
+                    l = getattr(employee, 'LatestEnd', None)
+                except Exception:
+                    e, l = None, None
+                detailed.append(
+                    f"Assignment outside shift bounds: proposed {start_iso}→{end_iso}, shift {e or '09:00'}–{l or '17:00'}"
+                )
+            elif 'days of support' in m.lower():
+                try:
+                    dos = getattr(patient, 'DaysOfSupport', None)
+                except Exception:
+                    dos = None
+                detailed.append(
+                    f"Patient not scheduled this day (DaysOfSupport={dos or 'n/a'}), proposed window {start_iso}→{end_iso}"
+                )
+            elif 'gender preference mismatch' in m:
+                try:
+                    pref = (getattr(patient, 'PreferenceOfCarer', '') or '').strip()
+                    emp_gender = getattr(employee.Gender, 'value', str(getattr(employee, 'Gender', '')))
+                except Exception:
+                    pref, emp_gender = '', ''
+                detailed.append(f"Gender preference mismatch: patient={pref or 'n/a'}, employee={emp_gender or 'n/a'}")
+            elif "does not speak" in m or 'language' in m:
+                try:
+                    pref_lang = (getattr(patient, 'LanguagePreference', '') or '').strip()
+                    emp_langs = (getattr(employee, 'LanguageSpoken', '') or '').strip()
+                except Exception:
+                    pref_lang, emp_langs = '', ''
+                detailed.append(f"Language mismatch: patient_pref={pref_lang or 'English'}, employee_langs={emp_langs or '-'}")
+            elif 'medicine services require' in m:
+                detailed.append("Medicine requires nurse: employee not qualified")
+            else:
+                detailed.append(msg)
+
+        return detailed
 
     # ---- Helpers ----
     def _within_shift_bounds(self, earliest: str, latest: str, start_dt: datetime, end_dt: datetime) -> bool:

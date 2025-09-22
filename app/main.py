@@ -530,6 +530,10 @@ async def bulk_delete_assignments(request: BulkDeleteRequest):
         if request.mode == "all":
             cursor.execute("DELETE FROM assignments")
             db_manager.conn.commit()
+            try:
+                db_manager.clear_unassigned()
+            except Exception:
+                pass
             return {"success": True, "deleted": cursor.rowcount}
 
         elif request.mode == "selected":
@@ -538,6 +542,11 @@ async def bulk_delete_assignments(request: BulkDeleteRequest):
             placeholders = ",".join(["?"] * len(request.ids))
             cursor.execute(f"DELETE FROM assignments WHERE id IN ({placeholders})", tuple(request.ids))
             db_manager.conn.commit()
+            # When deleting by specific IDs, also clear unassigned to avoid stale diagnostics
+            try:
+                db_manager.clear_unassigned()
+            except Exception:
+                pass
             return {"success": True, "deleted": cursor.rowcount}
 
         elif request.mode == "filtered":
@@ -549,6 +558,10 @@ async def bulk_delete_assignments(request: BulkDeleteRequest):
             placeholders = ",".join(["?"] * len(ids))
             cursor.execute(f"DELETE FROM assignments WHERE id IN ({placeholders})", tuple(ids))
             db_manager.conn.commit()
+            try:
+                db_manager.clear_unassigned()
+            except Exception:
+                pass
             return {"success": True, "deleted": cursor.rowcount}
 
         else:

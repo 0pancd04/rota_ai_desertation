@@ -250,7 +250,7 @@ class RotaService:
                     assignment.travel_time = self._calc_travel_minutes(selected_employee, patient)
 
             # DB-first validation before persisting
-            violations = self.validator.validate_proposed_assignment(
+            violations = self.validator.validate_with_details(
                 employee_id=assignment.employee_id,
                 patient_id=assignment.patient_id,
                 service_type=assignment.service_type,
@@ -301,7 +301,7 @@ class RotaService:
                         except Exception:
                             pass
                         cand.travel_time = self._calc_travel_minutes(emp, patient)
-                    v2 = self.validator.validate_proposed_assignment(
+                    v2 = self.validator.validate_with_details(
                         employee_id=cand.employee_id,
                         patient_id=cand.patient_id,
                         service_type=cand.service_type,
@@ -316,10 +316,23 @@ class RotaService:
                         break
                 if not chosen_assignment:
                     try:
+                        # Build enriched reasons into context. Additionally attach compact 'issues'.
+                        ctx = {"service_type": service_type.value}
+                        # Best-effort: derive overlapping employees/patient slots for that day
+                        try:
+                            overlaps = self.db_manager.get_overlapping_assignments_for_patient(patient.PatientID, assignment.start_time, assignment.end_time)
+                        except Exception:
+                            overlaps = []
+                        if overlaps:
+                            ctx["issues"] = [{
+                                "type": "patient_overlaps",
+                                "assignment_ids": ",".join([str(r.get('id')) for r in overlaps]),
+                                "details": ", ".join([f"#{r.get('id')} {r.get('start_time')}→{r.get('end_time')} (emp {r.get('employee_id')})" for r in overlaps[:6]])
+                            }]
                         self.db_manager.log_unassigned(
                             'patient', patient.PatientID, now_dt.date().isoformat(),
                             [f"Assignment violates rules: {', '.join(violations)}"],
-                            {"service_type": service_type.value}
+                            ctx
                         )
                     except Exception:
                         pass
@@ -349,7 +362,7 @@ class RotaService:
                 for _, _, _, emp2 in ranked2:
                     if not emp2:
                         continue
-                    v_second = self.validator.validate_proposed_assignment(
+                    v_second = self.validator.validate_with_details(
                         employee_id=emp2.EmployeeID,
                         patient_id=patient.PatientID,
                         service_type=service_type,
@@ -793,6 +806,11 @@ class RotaService:
         cursor = self.db_manager.conn.cursor()
         cursor.execute("DELETE FROM assignments")
         self.db_manager.conn.commit()
+        try:
+            # Also clear unassigned and summaries to keep state in sync
+            self.db_manager.clear_unassigned()
+        except Exception:
+            pass
         # Reset employee assignment counts
         for employee in self.data_processor.employees:
             employee.current_assignments = 0

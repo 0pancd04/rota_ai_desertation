@@ -710,6 +710,8 @@ class DatabaseManager:
         cursor.execute("DELETE FROM employees")
         cursor.execute("DELETE FROM patients")
         cursor.execute("DELETE FROM assignments")
+        cursor.execute("DELETE FROM unassigned")
+        cursor.execute("DELETE FROM unassigned_summaries")
         cursor.execute("DELETE FROM operations_log")
         cursor.execute("DELETE FROM data_uploads")
         cursor.execute("DELETE FROM notifications")
@@ -748,6 +750,18 @@ class DatabaseManager:
             return True
         except Exception as e:
             logger.error(f"Error clearing employees and patients: {e}")
+            return False
+
+    def clear_unassigned(self) -> bool:
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute("DELETE FROM unassigned")
+            cursor.execute("DELETE FROM unassigned_summaries")
+            self.conn.commit()
+            logger.info("Cleared unassigned data and summaries from database")
+            return True
+        except Exception as e:
+            logger.error(f"Error clearing unassigned: {e}")
             return False
 
     def close(self):
@@ -795,6 +809,43 @@ class DatabaseManager:
             logger.error(f"Error checking overlap for employee {employee_id}: {e}")
             return False
 
+    def get_overlapping_assignments_for_employee(self, employee_id: str, start_iso: str, end_iso: str) -> List[Dict]:
+        """Return list of overlapping assignment rows for an employee in [start_iso, end_iso].
+
+        Only rows with ISO-like datetimes are considered for comparison.
+        """
+        try:
+            from datetime import datetime
+            try:
+                new_start = datetime.fromisoformat(start_iso)
+                new_end = datetime.fromisoformat(end_iso)
+            except Exception:
+                return []
+            cursor = self.conn.cursor()
+            cursor.execute(
+                "SELECT * FROM assignments WHERE employee_id = ?",
+                (employee_id,)
+            )
+            columns = [col[0] for col in cursor.description]
+            results: List[Dict] = []
+            for row in cursor.fetchall():
+                data = dict(zip(columns, row))
+                st = data.get('start_time')
+                en = data.get('end_time')
+                if not st or not en:
+                    continue
+                try:
+                    est = datetime.fromisoformat(st)
+                    een = datetime.fromisoformat(en)
+                except Exception:
+                    continue
+                if not (een <= new_start or est >= new_end):
+                    results.append(data)
+            return results
+        except Exception as e:
+            logger.error(f"Error fetching overlapping assignments for employee {employee_id}: {e}")
+            return []
+
     def has_employee_patient_assignment_on_date(self, employee_id: str, patient_id: str, date_iso: str) -> bool:
         """Check if an employee already has an assignment with the patient on the given date.
 
@@ -816,6 +867,26 @@ class DatabaseManager:
         except Exception as e:
             logger.error(f"Error checking employee-patient daily assignment ({employee_id}, {patient_id}): {e}")
             return False
+
+    def get_employee_patient_assignments_on_date(self, employee_id: str, patient_id: str, date_iso: str) -> List[Dict]:
+        """Return all assignments for the given employee↔patient on the specified date."""
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute(
+                """
+                SELECT * FROM assignments
+                WHERE employee_id = ?
+                  AND patient_id = ?
+                  AND DATE(start_time) = DATE(?)
+                ORDER BY start_time ASC
+                """,
+                (employee_id, patient_id, date_iso)
+            )
+            columns = [col[0] for col in cursor.description]
+            return [dict(zip(columns, row)) for row in cursor.fetchall()]
+        except Exception as e:
+            logger.error(f"Error fetching employee-patient assignments on date: {e}")
+            return []
 
     def get_assignments_for_patient_on_date(self, patient_id: str, date_iso: str) -> List[Dict]:
         """Return assignments for a patient on a date, sorted by start_time."""
@@ -944,6 +1015,43 @@ class DatabaseManager:
         except Exception as e:
             logger.error(f"Error counting overlaps for patient {patient_id}: {e}")
             return 0
+
+    def get_overlapping_assignments_for_patient(self, patient_id: str, start_iso: str, end_iso: str) -> List[Dict]:
+        """Return assignments for a patient that overlap [start_iso, end_iso]."""
+        try:
+            from datetime import datetime
+            try:
+                new_start = datetime.fromisoformat(start_iso)
+                new_end = datetime.fromisoformat(end_iso)
+            except Exception:
+                return []
+            cursor = self.conn.cursor()
+            cursor.execute(
+                """
+                SELECT * FROM assignments
+                WHERE patient_id = ?
+                """,
+                (patient_id,)
+            )
+            columns = [col[0] for col in cursor.description]
+            results: List[Dict] = []
+            for row in cursor.fetchall():
+                data = dict(zip(columns, row))
+                st = data.get('start_time')
+                en = data.get('end_time')
+                if not st or not en:
+                    continue
+                try:
+                    est = datetime.fromisoformat(st)
+                    een = datetime.fromisoformat(en)
+                except Exception:
+                    continue
+                if not (een <= new_start or est >= new_end):
+                    results.append(data)
+            return results
+        except Exception as e:
+            logger.error(f"Error fetching overlapping assignments for patient {patient_id}: {e}")
+            return []
 
     # --- Unassigned logging and queries ---
     def log_unassigned(self, entity_type: str, entity_id: str, date_iso: str, reasons: List[str], context: Dict[str, Any] | None = None) -> int:

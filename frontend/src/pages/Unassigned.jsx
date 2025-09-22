@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { fetchUnassignedWeek, summarizeUnassignedEntity, fetchPatientDetails, fetchEmployeeDetails } from '../services/scheduleService';
+import useStore from '../store/useStore';
 
 function startOfWeek(date) {
   const d = new Date(date);
@@ -37,6 +38,9 @@ export default function Unassigned() {
   const [entityDetail, setEntityDetail] = useState(null); // { entityType, entityId, data }
   const [entityNames, setEntityNames] = useState(new Map()); // entityId -> display name
   const [headerSummary, setHeaderSummary] = useState(null); // { entityType, entityId, weekStart, weekEnd, text, loading, error }
+  const { reanalyzeAssignments } = useStore();
+  const [reanalyzeLoading, setReanalyzeLoading] = useState(false);
+  const [reanalyzeMessage, setReanalyzeMessage] = useState('');
 
   const moveWeek = (delta) => {
     const d = new Date(weekStart);
@@ -157,6 +161,58 @@ export default function Unassigned() {
     }
   };
 
+  const extractIssueAssignmentIds = (ctx) => {
+    try {
+      const issues = Array.isArray(ctx?.issues) ? ctx.issues : [];
+      const ids = new Set();
+      for (const it of issues) {
+        const raw = it?.assignment_ids;
+        if (!raw) continue;
+        const parts = Array.isArray(raw) ? raw : String(raw).split(',');
+        for (const p of parts) {
+          const id = parseInt(String(p).trim(), 10);
+          if (!isNaN(id)) ids.add(id);
+        }
+      }
+      return Array.from(ids);
+    } catch {
+      return [];
+    }
+  };
+
+  const handleReanalyzeOverlaps = async () => {
+    if (!cellDetail) return;
+    const ids = extractIssueAssignmentIds(cellDetail.context);
+    if (!ids.length) {
+      setReanalyzeMessage('No overlapping assignments detected to reanalyze.');
+      return;
+    }
+    setReanalyzeLoading(true);
+    setReanalyzeMessage('');
+    try {
+      const updated = await reanalyzeAssignments(ids, false);
+      if (updated && updated.length > 0) {
+        setReanalyzeMessage(`Reanalyzed ${ids.length} assignments. Updated ${updated.length}.`);
+      } else {
+        setReanalyzeMessage(`Reanalyzed ${ids.length} assignments. No changes applied.`);
+      }
+    } catch (e) {
+      setReanalyzeMessage(e?.message || 'Reanalysis failed');
+    } finally {
+      setReanalyzeLoading(false);
+    }
+  };
+
+  const copyIssueIdsToClipboard = async () => {
+    if (!cellDetail) return;
+    const ids = extractIssueAssignmentIds(cellDetail.context);
+    if (!ids.length) return;
+    try {
+      await navigator.clipboard.writeText(ids.join(','));
+      setReanalyzeMessage(`Copied IDs: ${ids.join(',')}`);
+    } catch {}
+  };
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
@@ -254,8 +310,39 @@ export default function Unassigned() {
                   </ul>
                 </div>
               )}
+              {Array.isArray(cellDetail.context?.issues) && cellDetail.context.issues.length > 0 && (
+                <div>
+                  <div className="text-sm font-medium text-gray-800 mb-1">Verification</div>
+                  <div className="space-y-2">
+                    {cellDetail.context.issues.map((it, idx) => (
+                      <div key={idx} className="border border-gray-200 rounded p-2 text-sm text-gray-700">
+                        <div className="font-medium text-gray-800">{it.type || 'issue'}</div>
+                        {it.details && <div className="text-gray-700">{it.details}</div>}
+                        {it.assignment_ids && (
+                          <div className="mt-1 flex flex-wrap gap-1">
+                            {String(it.assignment_ids).split(',').map((id) => (
+                              <span key={id} className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-800">#{String(id).trim()}</span>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {reanalyzeMessage && (
+                <div className="text-xs text-gray-600">{reanalyzeMessage}</div>
+              )}
             </div>
-            <div className="px-4 py-3 border-t flex justify-end">
+            <div className="px-4 py-3 border-t flex justify-between items-center">
+              <div className="flex items-center gap-2">
+                {extractIssueAssignmentIds(cellDetail.context).length > 0 && (
+                  <>
+                    <button className="px-3 py-1.5 rounded border border-gray-300 text-gray-700 disabled:opacity-50" disabled={reanalyzeLoading} onClick={handleReanalyzeOverlaps}>{reanalyzeLoading ? 'Reanalyzing…' : 'Reanalyze overlaps'}</button>
+                    <button className="px-3 py-1.5 rounded border border-gray-300 text-gray-700" onClick={copyIssueIdsToClipboard}>Copy IDs</button>
+                  </>
+                )}
+              </div>
               <button className="px-3 py-1.5 rounded border border-gray-300 text-gray-700" onClick={() => setCellDetail(null)}>Close</button>
             </div>
           </div>
