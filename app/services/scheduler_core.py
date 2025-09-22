@@ -272,6 +272,8 @@ class SchedulerCore:
                 patient_daily_minutes[patient.PatientID] = daily
 
         created_count = 0
+        # Collect reasons for patients we fail to assign today
+        patient_reasons: Dict[str, set[str]] = {}
 
         # Track how many meal-prep visits each patient has received today
         meal_visits_done: Dict[str, int] = {}
@@ -288,6 +290,9 @@ class SchedulerCore:
             # Limit visits to a reasonable number per day
             max_visits = getattr(employee, "max_patients_per_day", 8) or 8
             visits_done = 0
+
+            # Track whether this employee received any assignment today
+            employee_got_assignment = False
 
             while current_time < shift_end and visits_done < max_visits:
                 # Build candidate list of feasible patients
@@ -315,7 +320,14 @@ class SchedulerCore:
                     candidates.append((patient, travel_minutes))
 
                 if not candidates:
-                    break
+                    # No feasible patients at this time for this employee; try nudging time, or break if no demand remains
+                    # Nudge time slightly to see if new windows open; if still nothing after nudge, break
+                    current_time = current_time + timedelta(minutes=15)
+                    # If after nudge we are past shift end or still no demand, stop
+                    if current_time >= shift_end:
+                        break
+                    # Recompute on next loop iteration
+                    continue
 
                 # Choose nearest by travel time
                 candidates.sort(key=lambda x: x[1])
@@ -414,6 +426,16 @@ class SchedulerCore:
                         continue
                     # otherwise nudge time and retry
                     current_time = current_time + timedelta(minutes=5)
+                    # Record reasons for the chosen patient at this attempted window
+                    try:
+                        s = patient_reasons.get(chosen_patient.PatientID)
+                        if s is None:
+                            s = set()
+                            patient_reasons[chosen_patient.PatientID] = s
+                        for v in violations:
+                            s.add(v)
+                    except Exception:
+                        pass
                     continue
 
                 # Weekly capacity tracking in-memory to avoid overscheduling beyond cap in this run
@@ -460,7 +482,15 @@ class SchedulerCore:
                             tp = self._transport_priority(getattr(emp2, 'TransportMode', None))
                             second_ranking.append((is_jun, t2, tp, emp2))
                     if not second_ranking:
-                        # cannot satisfy concurrency; try next patient/time
+                        # cannot satisfy concurrency; record reason and try next patient/time
+                        try:
+                            s = patient_reasons.get(chosen_patient.PatientID)
+                            if s is None:
+                                s = set()
+                                patient_reasons[chosen_patient.PatientID] = s
+                            s.add("Cannot satisfy RequiredCarerSupport=2 concurrently")
+                        except Exception:
+                            pass
                         current_time = current_time + timedelta(minutes=5)
                         continue
                     second_ranking.sort(key=lambda x: (x[0], x[1], x[2]))
@@ -521,6 +551,7 @@ class SchedulerCore:
 
                 created_count += 1
                 visits_done += 1
+                employee_got_assignment = True
                 # Deduct remaining demand for non-meal services; for meal-prep we want 3x30 total per day
                 if is_meal:
                     # reduce demand by 30; initial demand was 90
@@ -538,6 +569,52 @@ class SchedulerCore:
                 if is_meal:
                     meal_visits_done[chosen_patient.PatientID] = meal_visits_done.get(chosen_patient.PatientID, 0) + 1
 
+            # After finishing this employee's shift, if they got no assignments today, log unassigned reason for employee
+            try:
+                todays_rows = self.db_manager.get_employee_assignments_for_date(employee.EmployeeID, day_date.isoformat())
+                if (todays_rows is None) or (len(todays_rows) == 0):
+                    emp_reasons = self._diagnose_employee_unassigned(employee, day_date, patient_daily_minutes)
+                    ctx = {
+                        "role_level": getattr(employee, 'RoleLevel', None),
+                        "qualification": getattr(employee, 'Qualification', None).value if getattr(employee, 'Qualification', None) else None,
+                        "languages": getattr(employee, 'LanguageSpoken', ''),
+                        "transport_mode": getattr(employee, 'TransportMode', None).value if getattr(employee, 'TransportMode', None) else None,
+                        "earliest_start": getattr(employee, 'EarliestStart', None),
+                        "latest_end": getattr(employee, 'LatestEnd', None),
+                    }
+                    self.db_manager.log_unassigned('employee', employee.EmployeeID, day_date.isoformat(), emp_reasons or ["No feasible assignments found"], ctx)
+            except Exception:
+                pass
+
+        # After all employees processed, log unassigned patients for the day
+        try:
+            for patient in self.data_processor.patients:
+                remaining = patient_daily_minutes.get(patient.PatientID, 0)
+                if remaining <= 0:
+                    continue
+                # Confirm none assigned in DB for this date
+                todays = self.db_manager.get_assignments_for_patient_on_date(patient.PatientID, day_date.isoformat())
+                if not todays:
+                    base_reasons = list(patient_reasons.get(patient.PatientID, set()))
+                    extra = self._diagnose_patient_unassigned(patient, day_date)
+                    # Merge and dedupe
+                    reason_set = set(base_reasons)
+                    for r in extra:
+                        reason_set.add(r)
+                    ctx = {
+                        "required_support": getattr(patient, 'RequiredSupport', None),
+                        "required_hours_per_week": getattr(patient, 'RequiredHoursOfSupport', None),
+                        "language_preference": getattr(patient, 'LanguagePreference', None),
+                        "preference_of_carer": getattr(patient, 'PreferenceOfCarer', None),
+                        "required_carer_support": getattr(patient, 'RequiredCarerSupport', None),
+                        "meal_prep_required": bool(getattr(patient, 'MealPrepRequired', False)),
+                        "days_of_support": getattr(patient, 'DaysOfSupport', None),
+                        "sat_sun_support": getattr(patient, 'SatSunSupport', None),
+                    }
+                    self.db_manager.log_unassigned('patient', patient.PatientID, day_date.isoformat(), list(reason_set) or ["No feasible employee/time window found"], ctx)
+        except Exception:
+            pass
+
         # Operation log: end
         try:
             self.db_manager.log_operation(
@@ -549,6 +626,122 @@ class SchedulerCore:
             pass
 
         return created_count
+
+    def _diagnose_patient_unassigned(self, patient: Patient, day_date: date) -> List[str]:
+        reasons: List[str] = []
+        try:
+            # Eligibility checks across workforce
+            employees: List[Employee] = list(self.data_processor.employees)
+            if not employees:
+                return ["No employees loaded"]
+
+            # DaysOfSupport gate should already exclude, but if present, record
+            try:
+                if not self._is_day_supported(getattr(patient, 'DaysOfSupport', ''), day_date):
+                    reasons.append("Patient not scheduled for support on this day (DaysOfSupport)")
+            except Exception:
+                pass
+
+            # Medication nurse requirement
+            if "medicine" in (getattr(patient, 'RequiredSupport', '') or '').lower():
+                nurses = [e for e in employees if getattr(e, 'Qualification', None) == QualificationEnum.NURSE]
+                if not nurses:
+                    reasons.append("No nurse available for medication")
+
+            # Gender preference
+            pref = (getattr(patient, 'PreferenceOfCarer', '') or '').strip().lower()
+            if pref in ("male", "female"):
+                has_gender = any((getattr(e, 'Gender', None).value or '').strip().lower() == pref for e in employees if getattr(e, 'Gender', None) is not None)
+                if not has_gender:
+                    reasons.append("No employee matches gender preference")
+
+            # Language preference (non-English)
+            lang_pref = (getattr(patient, 'LanguagePreference', 'English') or 'English').strip().lower()
+            if lang_pref and lang_pref != 'english':
+                has_lang = False
+                for e in employees:
+                    try:
+                        if lang_pref in (getattr(e, 'LanguageSpoken', '') or '').strip().lower():
+                            has_lang = True
+                            break
+                    except Exception:
+                        continue
+                if not has_lang:
+                    reasons.append("No employee speaks patient's preferred language")
+
+            # RequiredCarerSupport availability
+            try:
+                rcs = int(getattr(patient, 'RequiredCarerSupport', 1) or 1)
+            except Exception:
+                rcs = 1
+            elig = [e for e in employees if self._employee_can_serve(e, patient)]
+            if rcs >= 2 and len(elig) < 2:
+                reasons.append("Insufficient eligible employees to satisfy RequiredCarerSupport=2")
+
+            # Weekly capacity exhausted for eligible employees
+            if elig:
+                week_start = self._next_monday(day_date)
+                wk_start_iso = datetime.combine(week_start, dtime(0,0)).isoformat()
+                wk_end_iso = datetime.combine(week_start + timedelta(days=6), dtime(23,59)).isoformat()
+                all_exhausted = True
+                for e in elig:
+                    used = self.db_manager.sum_employee_minutes_for_week(e.EmployeeID, wk_start_iso, wk_end_iso)
+                    role = (getattr(e, 'RoleLevel', '') or '').strip().lower()
+                    cap = getattr(e, 'weekly_capacity_minutes', None)
+                    cap = cap if isinstance(cap, int) and cap > 0 else (1200 if role == 'junior' else 2160)
+                    if used + 30 <= cap:
+                        all_exhausted = False
+                        break
+                if all_exhausted:
+                    reasons.append("All eligible employees at or near weekly capacity")
+
+            # Fallback generic reason
+            if not reasons:
+                reasons.append("Scheduling constraints (overlaps/shift bounds) prevented assignment")
+        except Exception:
+            reasons = ["No feasible employee/time window found"]
+        return reasons
+
+    def _diagnose_employee_unassigned(self, employee: Employee, day_date: date, patient_daily_minutes: Dict[str, int]) -> List[str]:
+        reasons: List[str] = []
+        try:
+            # Determine patients with demand today
+            patients_with_demand: List[Patient] = []
+            for p in self.data_processor.patients:
+                if patient_daily_minutes.get(p.PatientID, 0) and patient_daily_minutes.get(p.PatientID, 0) > 0:
+                    patients_with_demand.append(p)
+
+            if not patients_with_demand:
+                return ["No patients required support today (after gating)"]
+
+            # Eligibility filter
+            eligible_patients = [p for p in patients_with_demand if self._employee_can_serve(employee, p)]
+            if not eligible_patients:
+                # Diagnose which filter likely blocked
+                any_medicine = any("medicine" in (getattr(p, 'RequiredSupport', '') or '').lower() for p in patients_with_demand)
+                if any_medicine and getattr(employee, 'Qualification', None) != QualificationEnum.NURSE:
+                    reasons.append("Not qualified nurse for medication cases")
+                # Gender and language cases cannot be summarized easily across multiple patients; provide generic
+                reasons.append("No matching patients given gender/language preferences")
+                return reasons
+
+            # If eligible exist, then likely time/overlap/capacity
+            # Check weekly capacity
+            week_start = self._next_monday(day_date)
+            wk_start_iso = datetime.combine(week_start, dtime(0,0)).isoformat()
+            wk_end_iso = datetime.combine(week_start + timedelta(days=6), dtime(23,59)).isoformat()
+            used = self.db_manager.sum_employee_minutes_for_week(employee.EmployeeID, wk_start_iso, wk_end_iso)
+            role = (getattr(employee, 'RoleLevel', '') or '').strip().lower()
+            cap = getattr(employee, 'weekly_capacity_minutes', None)
+            cap = cap if isinstance(cap, int) and cap > 0 else (1200 if role == 'junior' else 2160)
+            if used + 30 > cap:
+                reasons.append("Weekly capacity exhausted")
+
+            # Overlap/shift bounds generic
+            reasons.append("Time windows conflicted with shift bounds or existing assignments")
+        except Exception:
+            reasons = ["No feasible patients/time windows"]
+        return reasons
 
     def _employee_can_serve(self, employee: Employee, patient: Patient) -> bool:
         # Medicine requires nurse

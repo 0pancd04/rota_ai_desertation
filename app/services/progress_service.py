@@ -15,6 +15,7 @@ class ProgressStatus(Enum):
 class ProgressType(Enum):
     WEEKLY_ROTA = "weekly_rota"
     CREATE_ASSIGNMENT = "create_assignment"
+    UNASSIGNED_SUMMARY = "unassigned_summary"
 
 class ProgressService:
     def __init__(self, notification_service=None):

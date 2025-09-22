@@ -164,6 +164,35 @@ class DatabaseManager:
             )
         ''')
         
+        # Table for unassigned reasons (patients or employees)
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS unassigned (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                entity_type TEXT NOT NULL, -- 'patient' | 'employee'
+                entity_id TEXT NOT NULL,
+                date TEXT NOT NULL, -- ISO date (YYYY-MM-DD)
+                reasons TEXT NOT NULL, -- JSON array of strings
+                context TEXT, -- JSON object with extra fields
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+
+        # Cache table for AI summaries of unassigned (per entity/week)
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS unassigned_summaries (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                entity_type TEXT NOT NULL,
+                entity_id TEXT NOT NULL,
+                week_start TEXT NOT NULL,
+                week_end TEXT NOT NULL,
+                summary TEXT,
+                reasons TEXT, -- JSON array
+                dates TEXT,   -- JSON array
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(entity_type, entity_id, week_start, week_end)
+            )
+        ''')
+        
         self.conn.commit()
 
         # Create helpful indices for performance and integrity checks
@@ -171,6 +200,8 @@ class DatabaseManager:
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_assign_emp_time ON assignments(employee_id, start_time, end_time)')
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_assign_patient_time ON assignments(patient_id, start_time, end_time)')
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_assign_start_time ON assignments(start_time)')
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_unassigned_entity_date ON unassigned(entity_type, entity_id, date)')
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_unassigned_summary_entity_week ON unassigned_summaries(entity_type, entity_id, week_start, week_end)')
             self.conn.commit()
         except Exception as e:
             logger.warning(f"Index creation failed: {e}")
@@ -913,6 +944,209 @@ class DatabaseManager:
         except Exception as e:
             logger.error(f"Error counting overlaps for patient {patient_id}: {e}")
             return 0
+
+    # --- Unassigned logging and queries ---
+    def log_unassigned(self, entity_type: str, entity_id: str, date_iso: str, reasons: List[str], context: Dict[str, Any] | None = None) -> int:
+        """Log an unassigned record for a patient or employee with reasons (JSON).
+
+        entity_type: 'patient' | 'employee'
+        date_iso: any ISO datetime or date string; DATE() will normalize
+        reasons: list of strings (will be de-duplicated here for compactness)
+        context: optional dict for additional context details
+        """
+        try:
+            # Normalize reasons (dedupe, trim)
+            unique_reasons = []
+            seen = set()
+            for r in reasons or []:
+                try:
+                    key = (r or '').strip()
+                except Exception:
+                    key = str(r)
+                if key and key not in seen:
+                    seen.add(key)
+                    unique_reasons.append(key)
+            payload_reasons = json.dumps(unique_reasons or ["No feasible assignment found"])
+            payload_context = json.dumps(context) if context else None
+            cursor = self.conn.cursor()
+            cursor.execute(
+                '''
+                INSERT INTO unassigned (entity_type, entity_id, date, reasons, context)
+                VALUES (?, ?, DATE(?), ?, ?)
+                ''',
+                (entity_type, entity_id, date_iso, payload_reasons, payload_context)
+            )
+            self.conn.commit()
+            return cursor.lastrowid
+        except Exception as e:
+            logger.error(f"Error logging unassigned for {entity_type} {entity_id} on {date_iso}: {e}")
+            return None
+
+    def _fetch_unassigned_rows(self, entity_type: str, week_start_iso: str, week_end_iso: str) -> List[Dict[str, Any]]:
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute(
+                '''
+                SELECT id, entity_type, entity_id, date, reasons, context, created_at
+                FROM unassigned
+                WHERE entity_type = ? AND DATE(date) BETWEEN DATE(?) AND DATE(?)
+                ORDER BY date ASC, created_at ASC
+                ''',
+                (entity_type, week_start_iso, week_end_iso)
+            )
+            cols = [c[0] for c in cursor.description]
+            rows = [dict(zip(cols, row)) for row in cursor.fetchall()]
+            # Parse JSON fields
+            for r in rows:
+                try:
+                    r['reasons'] = json.loads(r.get('reasons') or '[]')
+                except Exception:
+                    r['reasons'] = []
+                try:
+                    r['context'] = json.loads(r.get('context') or '{}')
+                except Exception:
+                    r['context'] = {}
+            return rows
+        except Exception as e:
+            logger.error(f"Error fetching unassigned rows: {e}")
+            return []
+
+    def get_unassigned_patients_for_week(self, week_start_iso: str, week_end_iso: str) -> List[Dict[str, Any]]:
+        """Return aggregated unassigned patients for the week with merged reasons per patient/date."""
+        rows = self._fetch_unassigned_rows('patient', week_start_iso, week_end_iso)
+        aggregated: Dict[tuple, Dict[str, Any]] = {}
+        for r in rows:
+            key = (r.get('entity_id'), r.get('date'))
+            entry = aggregated.get(key)
+            if not entry:
+                aggregated[key] = {
+                    'patient_id': r.get('entity_id'),
+                    'date': r.get('date'),
+                    'reasons': list(r.get('reasons') or []),
+                    'context': r.get('context') or {},
+                }
+            else:
+                # Merge reasons/context
+                seen = set(entry['reasons'])
+                for rr in r.get('reasons') or []:
+                    if rr not in seen:
+                        entry['reasons'].append(rr)
+                        seen.add(rr)
+                # Context: prefer existing; if missing keys, extend
+                try:
+                    for k, v in (r.get('context') or {}).items():
+                        if k not in entry['context']:
+                            entry['context'][k] = v
+                except Exception:
+                    pass
+        return list(aggregated.values())
+
+    def get_unassigned_employees_for_week(self, week_start_iso: str, week_end_iso: str) -> List[Dict[str, Any]]:
+        """Return aggregated unassigned employees for the week with merged reasons per employee/date."""
+        rows = self._fetch_unassigned_rows('employee', week_start_iso, week_end_iso)
+        aggregated: Dict[tuple, Dict[str, Any]] = {}
+        for r in rows:
+            key = (r.get('entity_id'), r.get('date'))
+            entry = aggregated.get(key)
+            if not entry:
+                aggregated[key] = {
+                    'employee_id': r.get('entity_id'),
+                    'date': r.get('date'),
+                    'reasons': list(r.get('reasons') or []),
+                    'context': r.get('context') or {},
+                }
+            else:
+                seen = set(entry['reasons'])
+                for rr in r.get('reasons') or []:
+                    if rr not in seen:
+                        entry['reasons'].append(rr)
+                        seen.add(rr)
+                try:
+                    for k, v in (r.get('context') or {}).items():
+                        if k not in entry['context']:
+                            entry['context'][k] = v
+                except Exception:
+                    pass
+        return list(aggregated.values())
+
+    def get_unassigned_for_entity_week(self, entity_type: str, entity_id: str, week_start_iso: str, week_end_iso: str) -> List[Dict[str, Any]]:
+        """Return raw unassigned rows for a specific entity across a week (ordered by date)."""
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute(
+                '''
+                SELECT id, entity_type, entity_id, date, reasons, context, created_at
+                FROM unassigned
+                WHERE entity_type = ? AND entity_id = ? AND DATE(date) BETWEEN DATE(?) AND DATE(?)
+                ORDER BY date ASC, created_at ASC
+                ''',
+                (entity_type, entity_id, week_start_iso, week_end_iso)
+            )
+            cols = [c[0] for c in cursor.description]
+            rows = [dict(zip(cols, row)) for row in cursor.fetchall()]
+            for r in rows:
+                try:
+                    r['reasons'] = json.loads(r.get('reasons') or '[]')
+                except Exception:
+                    r['reasons'] = []
+                try:
+                    r['context'] = json.loads(r.get('context') or '{}')
+                except Exception:
+                    r['context'] = {}
+            return rows
+        except Exception as e:
+            logger.error(f"Error fetching unassigned for {entity_type} {entity_id}: {e}")
+            return []
+
+    # --- Unassigned summaries cache ---
+    def get_unassigned_summary(self, entity_type: str, entity_id: str, week_start_iso: str, week_end_iso: str) -> Dict[str, Any] | None:
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute(
+                '''
+                SELECT entity_type, entity_id, week_start, week_end, summary, reasons, dates, created_at
+                FROM unassigned_summaries
+                WHERE entity_type = ? AND entity_id = ? AND week_start = ? AND week_end = ?
+                LIMIT 1
+                ''',
+                (entity_type, entity_id, week_start_iso, week_end_iso)
+            )
+            row = cursor.fetchone()
+            if not row:
+                return None
+            cols = [d[0] for d in cursor.description]
+            data = dict(zip(cols, row))
+            # Parse JSON arrays
+            try:
+                data['reasons'] = json.loads(data.get('reasons') or '[]')
+            except Exception:
+                data['reasons'] = []
+            try:
+                data['dates'] = json.loads(data.get('dates') or '[]')
+            except Exception:
+                data['dates'] = []
+            return data
+        except Exception as e:
+            logger.error(f"Error reading unassigned summary cache: {e}")
+            return None
+
+    def save_unassigned_summary(self, entity_type: str, entity_id: str, week_start_iso: str, week_end_iso: str, summary: str, reasons: List[str], dates: List[str]) -> bool:
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute(
+                '''
+                INSERT INTO unassigned_summaries (entity_type, entity_id, week_start, week_end, summary, reasons, dates)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(entity_type, entity_id, week_start, week_end)
+                DO UPDATE SET summary=excluded.summary, reasons=excluded.reasons, dates=excluded.dates, created_at=CURRENT_TIMESTAMP
+                ''',
+                (entity_type, entity_id, week_start_iso, week_end_iso, summary, json.dumps(reasons or []), json.dumps(dates or []))
+            )
+            self.conn.commit()
+            return True
+        except Exception as e:
+            logger.error(f"Error saving unassigned summary: {e}")
+            return False
 
     # --- Simple transaction helpers ---
     def begin_transaction(self):

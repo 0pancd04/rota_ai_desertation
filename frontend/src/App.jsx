@@ -10,6 +10,7 @@ import AssignmentOverview from './pages/AssignmentOverview';
 import Stats from './pages/Stats';
 import CreateAssignment from './pages/CreateAssignment';
 import Timeline from './pages/Timeline';
+import Unassigned from './pages/Unassigned';
 import { ProgressProvider, useProgress } from './contexts/ProgressContext';
 import ProgressIndicator from './components/ProgressIndicator';
 import NotificationTray from './components/NotificationTray';
@@ -83,6 +84,12 @@ function AppContent() {
       href: '/timeline', 
       icon: ClipboardDocumentListIcon,
       current: location.pathname === '/timeline'
+    },
+    { 
+      name: 'Unassigned', 
+      href: '/unassigned', 
+      icon: ClipboardDocumentListIcon,
+      current: location.pathname === '/unassigned'
     },
     { 
       name: 'Stats', 
@@ -257,6 +264,7 @@ function AppContent() {
               <Route path="/assignments" element={<Assignments />} />
               <Route path="/assignment-overview" element={<AssignmentOverview />} />
               <Route path="/timeline" element={<Timeline />} />
+              <Route path="/unassigned" element={<Unassigned />} />
               <Route path="/stats" element={<Stats />} />
               <Route path="/create-assignment" element={<CreateAssignment />} />
             </Routes>

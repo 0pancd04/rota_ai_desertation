@@ -150,6 +150,8 @@ export const ProgressProvider = ({ children }) => {
         return 'Weekly Rota Generated';
       case 'create_assignment':
         return 'Assignment Created';
+      case 'unassigned_summary':
+        return 'AI Summary Generated';
       default:
         return 'Task Completed';
     }
@@ -166,6 +168,14 @@ export const ProgressProvider = ({ children }) => {
           return `${assignment.employee_name} assigned to ${assignment.patient_name}`;
         }
         return 'Assignment created successfully';
+      case 'unassigned_summary':
+        if (result?.results && Array.isArray(result.results)) {
+          return `Generated ${result.results.length} AI summaries`;
+        }
+        if (result?.entity_type && result?.entity_id) {
+          return `Summary ready for ${result.entity_type} ${result.entity_id}`;
+        }
+        return 'AI Summary generated';
       default:
         return 'Task completed successfully';
     }
@@ -214,6 +224,7 @@ export const ProgressProvider = ({ children }) => {
     await deleteAllNotifications();
     // Reload notifications to reflect the change
     await loadNotifications();
+    await loadUnreadCount();
   };
 
   const getFilteredNotifications = () => {

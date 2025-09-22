@@ -61,6 +61,8 @@ const ProgressIndicator = ({ task, onClose }) => {
         return 'Generating Weekly Rota';
       case 'create_assignment':
         return 'Creating Assignment';
+      case 'unassigned_summary':
+        return 'AI Summary Generating…';
       default:
         return 'Processing Task';
     }

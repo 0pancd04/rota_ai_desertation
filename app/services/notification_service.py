@@ -31,7 +31,10 @@ class NotificationService:
 
     def get_unread_notifications_count(self) -> int:
         """Get count of unread notifications"""
-        return self.db_manager.get_unread_notifications_count()
+        try:
+            return self.db_manager.get_unread_notifications_count()
+        except Exception:
+            return 0
 
     def mark_notification_read(self, notification_id: str) -> bool:
         """Mark a notification as read"""
@@ -62,6 +65,13 @@ class NotificationService:
             message = f"{assignment.get('employee_name', 'Employee')} assigned to {assignment.get('patient_name', 'Patient')}"
             action_type = 'navigate'
             action_data = {'route': '/assignments'}
+        elif task_type == 'unassigned_summary':
+            title = 'AI Summary Generated'
+            entity_type = (result or {}).get('entity_type')
+            entity_id = (result or {}).get('entity_id')
+            message = f"Summary ready for {entity_type} {entity_id}"
+            action_type = 'navigate'
+            action_data = {'route': '/unassigned'}
         else:
             title = 'Task Completed'
             message = 'Task completed successfully'

@@ -28,3 +28,34 @@ export async function fetchPatientDetails(patientId) {
   return res.data;
 }
 
+export async function fetchUnassignedWeek(weekStart, weekEnd, summarize = false) {
+  const res = await axios.post(`${API_BASE_URL}/unassigned/week`, {
+    week_start: weekStart,
+    week_end: weekEnd,
+    summarize,
+  });
+  return res.data;
+}
+
+export async function summarizeUnassignedEntity(entityType, entityId, weekStart, weekEnd, regenerate = false) {
+  const res = await axios.post(`${API_BASE_URL}/unassigned/summarize`, {
+    entity_type: entityType,
+    entity_id: entityId,
+    week_start: weekStart,
+    week_end: weekEnd,
+    regenerate,
+  });
+  return res.data;
+}
+
+export async function summarizeUnassignedBulk(entityType, ids, weekStart, weekEnd, regenerate = false) {
+  const res = await axios.post(`${API_BASE_URL}/unassigned/summarize/bulk`, {
+    entity_type: entityType,
+    ids,
+    week_start: weekStart,
+    week_end: weekEnd,
+    regenerate,
+  });
+  return res.data;
+}
+

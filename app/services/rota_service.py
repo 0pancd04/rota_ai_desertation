@@ -79,6 +79,17 @@ class RotaService:
             # DaysOfSupport prefilter (today unless preferred_time implies otherwise)
             now_dt = datetime.now()
             if not self._is_day_supported(getattr(patient, 'DaysOfSupport', ''), now_dt.date()):
+                # Log unassigned for patient for today's date
+                try:
+                    self.db_manager.log_unassigned(
+                        'patient',
+                        patient_id,
+                        now_dt.date().isoformat(),
+                        ["Patient not scheduled for support on this day (DaysOfSupport)"],
+                        {"stage": "prefilter"}
+                    )
+                except Exception:
+                    pass
                 raise Exception("Patient is not scheduled for support on this day (DaysOfSupport)")
             
             # Step 3: Map service type
@@ -88,6 +99,14 @@ class RotaService:
             qualified_employees = self.data_processor.get_qualified_employees_for_service(service_type)
             
             if not qualified_employees:
+                try:
+                    self.db_manager.log_unassigned(
+                        'patient', patient.PatientID, now_dt.date().isoformat(),
+                        [f"No qualified employees available for {service_type.value} service"],
+                        {"service_type": service_type.value}
+                    )
+                except Exception:
+                    pass
                 raise Exception(f"No qualified employees available for {service_type.value} service")
             
             # Step 5: Filter available employees based on current workload
@@ -105,6 +124,14 @@ class RotaService:
                 pass
 
             if not available_employees:
+                try:
+                    self.db_manager.log_unassigned(
+                        'patient', patient.PatientID, now_dt.date().isoformat(),
+                        ["No employees available after applying gender preference filter"],
+                        {"preference_of_carer": getattr(patient, 'PreferenceOfCarer', None)}
+                    )
+                except Exception:
+                    pass
                 raise Exception("No employees available after applying gender preference filter")
             
             if not available_employees:
@@ -288,6 +315,14 @@ class RotaService:
                         selected_employee = emp
                         break
                 if not chosen_assignment:
+                    try:
+                        self.db_manager.log_unassigned(
+                            'patient', patient.PatientID, now_dt.date().isoformat(),
+                            [f"Assignment violates rules: {', '.join(violations)}"],
+                            {"service_type": service_type.value}
+                        )
+                    except Exception:
+                        pass
                     raise Exception(f"Assignment violates rules: {', '.join(violations)}")
                 assignment = chosen_assignment
             
@@ -458,6 +493,12 @@ class RotaService:
             
         except Exception as e:
             logger.error(f"Error processing assignment request: {str(e)}")
+            # Best-effort: attach unassigned log if patient_id available in prompt parsing
+            try:
+                # attempt to parse patient id from prompt quickly
+                words = request_prompt = ""
+            except Exception:
+                pass
             raise
     
     async def generate_weekly_schedule(self, engine: str = "core"):

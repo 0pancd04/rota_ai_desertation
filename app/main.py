@@ -87,6 +87,18 @@ class WeekRange(BaseModel):
     week_start: str
     week_end: str
 
+class UnassignedWeekRequest(BaseModel):
+    week_start: str
+    week_end: str
+    summarize: bool | None = False
+
+class UnassignedSummarizeRequest(BaseModel):
+    entity_type: str  # 'patient' | 'employee'
+    entity_id: str
+    week_start: str
+    week_end: str
+    regenerate: bool | None = False
+
 @app.get("/")
 async def root():
     return {"message": "AI Rota System for Healthcare is running - Development Mode Active!"}
@@ -605,6 +617,224 @@ async def get_week_assignments(req: WeekRange):
         return {"assignments": data}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error fetching weekly assignments: {str(e)}")
+
+@app.post("/unassigned/week")
+async def get_unassigned_week(req: UnassignedWeekRequest):
+    """Get unassigned patients and employees for a given ISO week range, optionally with AI summaries."""
+    try:
+        patients = db_manager.get_unassigned_patients_for_week(req.week_start, req.week_end)
+        employees = db_manager.get_unassigned_employees_for_week(req.week_start, req.week_end)
+        result = {"patients": patients, "employees": employees}
+
+        if req.summarize:
+            # Build simple prompts for AI summaries per patient/employee over the week
+            try:
+                # Summarize patients
+                for item in result["patients"]:
+                    pid = item.get("patient_id")
+                    date = item.get("date")
+                    reasons = item.get("reasons", [])
+                    context = item.get("context", {})
+                    prompt = (
+                        f"Summarize why patient {pid} on {date} had no assignment. "
+                        f"Reasons: {reasons}. Context: {context}. "
+                        "Provide a one-paragraph explanation and 2 bullet suggestions to resolve."
+                    )
+                    try:
+                        resp = openai_service.client.chat.completions.create(
+                            model=openai_service.model,
+                            messages=[{"role": "user", "content": prompt}],
+                            temperature=0.2
+                        )
+                        item["ai_summary"] = resp.choices[0].message.content
+                    except Exception as e:
+                        item["ai_summary"] = ""
+                # Summarize employees
+                for item in result["employees"]:
+                    eid = item.get("employee_id")
+                    date = item.get("date")
+                    reasons = item.get("reasons", [])
+                    context = item.get("context", {})
+                    prompt = (
+                        f"Summarize why employee {eid} on {date} received no assignment. "
+                        f"Reasons: {reasons}. Context: {context}. "
+                        "Provide a one-paragraph explanation and 2 bullet suggestions to resolve."
+                    )
+                    try:
+                        resp = openai_service.client.chat.completions.create(
+                            model=openai_service.model,
+                            messages=[{"role": "user", "content": prompt}],
+                            temperature=0.2
+                        )
+                        item["ai_summary"] = resp.choices[0].message.content
+                    except Exception:
+                        item["ai_summary"] = ""
+            except Exception:
+                pass
+
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error fetching unassigned: {str(e)}")
+
+@app.post("/unassigned/summarize")
+async def summarize_unassigned(req: UnassignedSummarizeRequest):
+    """Generate an AI summary for a specific patient/employee across the given week."""
+    try:
+        if req.entity_type not in ("patient", "employee"):
+            raise HTTPException(status_code=400, detail="Invalid entity_type")
+        # Check cache unless regenerate is requested
+        if not req.regenerate:
+            cached = db_manager.get_unassigned_summary(req.entity_type, req.entity_id, req.week_start, req.week_end)
+            if cached:
+                return {"summary": cached.get('summary') or "", "reasons": cached.get('reasons') or [], "dates": cached.get('dates') or [], "entity_type": req.entity_type, "entity_id": req.entity_id, "cached": True}
+
+        # Background task with progress + notification
+        task_id = progress_service.create_task(ProgressType.UNASSIGNED_SUMMARY, f"Generating summary for {req.entity_type} {req.entity_id}")
+        await progress_service.start_task(task_id)
+        try:
+            await progress_service.update_progress(task_id, 10, "Collecting data...", 4)
+            rows = db_manager.get_unassigned_for_entity_week(req.entity_type, req.entity_id, req.week_start, req.week_end)
+            reasons = []
+            contexts = []
+            dates = []
+            for r in rows:
+                for v in r.get('reasons', []):
+                    if v not in reasons:
+                        reasons.append(v)
+                contexts.append(r.get('context', {}))
+                dates.append(r.get('date'))
+            await progress_service.update_progress(task_id, 40, "Preparing AI prompt...", 4)
+            prompt = (
+                f"Summarize why {req.entity_type} {req.entity_id} had unassigned entries between {req.week_start} and {req.week_end}. "
+                f"Reasons: {reasons}. Contexts: {contexts}. Dates: {dates}. "
+                "Provide a concise paragraph and then 3 bullet suggestions to improve scheduling."
+            )
+            await progress_service.update_progress(task_id, 70, "Calling OpenAI...", 4)
+            try:
+                resp = openai_service.client.chat.completions.create(
+                    model=openai_service.model,
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=0.2
+                )
+                text = resp.choices[0].message.content or ""
+            except Exception as e:
+                text = ""
+            # Save in cache
+            try:
+                db_manager.save_unassigned_summary(req.entity_type, req.entity_id, req.week_start, req.week_end, text, reasons, dates)
+            except Exception:
+                pass
+            result = {"summary": text, "reasons": reasons, "dates": dates, "entity_type": req.entity_type, "entity_id": req.entity_id}
+            await progress_service.complete_task(task_id, result=result)
+            # Create notification
+            try:
+                notification_service.create_task_completion_notification('unassigned_summary', result)
+            except Exception:
+                pass
+            return result
+        except Exception as e:
+            await progress_service.complete_task(task_id, error=str(e))
+            raise HTTPException(status_code=500, detail=f"Error generating unassigned summary: {e}")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error generating unassigned summary: {str(e)}")
+
+class UnassignedBulkSummarizeRequest(BaseModel):
+    entity_type: str  # 'patient' | 'employee'
+    ids: list[str] | None = None  # if None or empty, summarize for all entities present in unassigned for the week
+    week_start: str
+    week_end: str
+    regenerate: bool | None = False
+
+@app.post("/unassigned/summarize/bulk")
+async def summarize_unassigned_bulk(req: UnassignedBulkSummarizeRequest):
+    try:
+        if req.entity_type not in ("patient", "employee"):
+            raise HTTPException(status_code=400, detail="Invalid entity_type")
+
+        # determine target ids
+        targets: list[str] = []
+        if req.ids:
+            targets = list({x for x in req.ids if x})
+        else:
+            # collect from weekly unassigned
+            if req.entity_type == 'patient':
+                rows = db_manager.get_unassigned_patients_for_week(req.week_start, req.week_end)
+                targets = sorted({r.get('patient_id') for r in rows if r.get('patient_id')})
+            else:
+                rows = db_manager.get_unassigned_employees_for_week(req.week_start, req.week_end)
+                targets = sorted({r.get('employee_id') for r in rows if r.get('employee_id')})
+
+        task_id = progress_service.create_task(ProgressType.UNASSIGNED_SUMMARY, f"Generating summaries for {req.entity_type}s ({len(targets)})")
+        await progress_service.start_task(task_id)
+
+        results = []
+        total = max(1, len(targets))
+        for idx, eid in enumerate(targets):
+            pct = int(100 * (idx / total))
+            await progress_service.update_progress(task_id, min(95, pct), f"Summarizing {req.entity_type} {eid} ({idx+1}/{total})", total)
+            # Use cache unless regenerate
+            if not req.regenerate:
+                cached = db_manager.get_unassigned_summary(req.entity_type, eid, req.week_start, req.week_end)
+                if cached:
+                    results.append({
+                        "entity_type": req.entity_type,
+                        "entity_id": eid,
+                        "summary": cached.get('summary') or "",
+                        "reasons": cached.get('reasons') or [],
+                        "dates": cached.get('dates') or [],
+                        "cached": True
+                    })
+                    continue
+            # compute fresh
+            rows = db_manager.get_unassigned_for_entity_week(req.entity_type, eid, req.week_start, req.week_end)
+            reasons, contexts, dates = [], [], []
+            for r in rows:
+                for v in r.get('reasons', []):
+                    if v not in reasons:
+                        reasons.append(v)
+                contexts.append(r.get('context', {}))
+                dates.append(r.get('date'))
+            prompt = (
+                f"Summarize why {req.entity_type} {eid} had unassigned entries between {req.week_start} and {req.week_end}. "
+                f"Reasons: {reasons}. Contexts: {contexts}. Dates: {dates}. "
+                "Provide a concise paragraph and then 3 bullet suggestions to improve scheduling."
+            )
+            try:
+                resp = openai_service.client.chat.completions.create(
+                    model=openai_service.model,
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=0.2
+                )
+                text = resp.choices[0].message.content or ""
+            except Exception:
+                text = ""
+            db_manager.save_unassigned_summary(req.entity_type, eid, req.week_start, req.week_end, text, reasons, dates)
+            results.append({
+                "entity_type": req.entity_type,
+                "entity_id": eid,
+                "summary": text,
+                "reasons": reasons,
+                "dates": dates
+            })
+
+        await progress_service.complete_task(task_id, result={"entity_type": req.entity_type, "count": len(results), "results": results})
+        # One notification for bulk
+        try:
+            notification_service.create_task_completion_notification('unassigned_summary', {"entity_type": f"{req.entity_type}s", "entity_id": f"{len(results)} items"})
+        except Exception:
+            pass
+        return {"results": results}
+    except HTTPException:
+        raise
+    except Exception as e:
+        try:
+            await progress_service.complete_task(task_id, error=str(e))
+        except Exception:
+            pass
+        raise HTTPException(status_code=500, detail=f"Bulk summarize failed: {e}")
+    
 
 @app.post("/employees/weekly-summary")
 async def get_employees_weekly_summary(req: WeekRange):
