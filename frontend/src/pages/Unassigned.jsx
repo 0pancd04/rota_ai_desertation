@@ -297,9 +297,11 @@ export default function Unassigned() {
             <div className="p-4 space-y-3">
               {cellDetail.context && (
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-sm text-gray-700">
-                  {Object.entries(cellDetail.context).map(([k,v]) => (
-                    <div key={k}><span className="text-gray-500">{k}:</span> {String(v)}</div>
-                  ))}
+                  {Object.entries(cellDetail.context)
+                    .filter(([k,v]) => k !== 'issues' && k !== 'attempts' && (v === null || ['string','number','boolean'].includes(typeof v)))
+                    .map(([k,v]) => (
+                      <div key={k}><span className="text-gray-500">{k}:</span> {v === null ? '-' : (typeof v === 'boolean' ? (v ? 'Yes' : 'No') : String(v))}</div>
+                    ))}
                 </div>
               )}
               {Array.isArray(cellDetail.reasons) && cellDetail.reasons.length > 0 && (
@@ -310,23 +312,70 @@ export default function Unassigned() {
                   </ul>
                 </div>
               )}
+              {Array.isArray(cellDetail.context?.attempts) && cellDetail.context.attempts.length > 0 && (
+                <div className="overflow-x-auto">
+                  <div className="text-sm font-medium text-gray-800 mb-1">Attempts</div>
+                  <table className="min-w-full text-sm text-left border border-gray-200 rounded-md overflow-hidden">
+                    <thead className="bg-gray-50 text-gray-700">
+                      <tr>
+                        <th className="px-3 py-2 border-b">{cellDetail.entityType === 'patients' ? 'Employee' : 'Patient'}</th>
+                        <th className="px-3 py-2 border-b">Service</th>
+                        <th className="px-3 py-2 border-b">Time</th>
+                        <th className="px-3 py-2 border-b">Violations</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {cellDetail.context.attempts.slice(0, 50).map((att, idx) => {
+                        const counterpart = cellDetail.entityType === 'patients'
+                          ? (att.employee_name || att.employee_id)
+                          : (att.patient_name || att.patient_id);
+                        const timeStr = `${att.start_time || ''} \u2192 ${att.end_time || ''}`;
+                        const viols = Array.isArray(att.violations) ? att.violations : [];
+                        return (
+                          <tr key={idx} className="odd:bg-white even:bg-gray-50 text-gray-800">
+                            <td className="px-3 py-2 border-b align-top">
+                              <div className="font-medium">{counterpart || '-'}</div>
+                              <div className="text-xs text-gray-500">{cellDetail.entityType === 'patients' ? (att.employee_id || '') : (att.patient_id || '')}</div>
+                            </td>
+                            <td className="px-3 py-2 border-b align-top">{(att.service_type || '').toString().replace('_',' ')}</td>
+                            <td className="px-3 py-2 border-b align-top whitespace-nowrap">{timeStr}</td>
+                            <td className="px-3 py-2 border-b align-top">
+                              <ul className="list-disc list-inside space-y-1">
+                                {viols.map((v, i2) => (
+                                  <li key={i2}>{String(v)}</li>
+                                ))}
+                              </ul>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
               {Array.isArray(cellDetail.context?.issues) && cellDetail.context.issues.length > 0 && (
                 <div>
                   <div className="text-sm font-medium text-gray-800 mb-1">Verification</div>
                   <div className="space-y-2">
-                    {cellDetail.context.issues.map((it, idx) => (
-                      <div key={idx} className="border border-gray-200 rounded p-2 text-sm text-gray-700">
-                        <div className="font-medium text-gray-800">{it.type || 'issue'}</div>
-                        {it.details && <div className="text-gray-700">{it.details}</div>}
-                        {it.assignment_ids && (
-                          <div className="mt-1 flex flex-wrap gap-1">
-                            {String(it.assignment_ids).split(',').map((id) => (
-                              <span key={id} className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-800">#{String(id).trim()}</span>
-                            ))}
+                    {cellDetail.context.issues.map((it, idx) => {
+                      const t = (it.type || 'issue').toString();
+                      const color = t === 'patient_overlaps' ? 'bg-blue-100 text-blue-800' : t === 'employee_overlaps' ? 'bg-orange-100 text-orange-800' : t === 'employee_same_day_assignments' ? 'bg-gray-100 text-gray-800' : 'bg-red-100 text-red-800';
+                      return (
+                        <div key={idx} className="border border-gray-200 rounded p-2 text-sm text-gray-700">
+                          <div className="flex items-center gap-2 mb-1">
+                            <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${color}`}>{t.replace(/_/g,' ')}</span>
                           </div>
-                        )}
-                      </div>
-                    ))}
+                          {it.details && <div className="text-gray-700">{it.details}</div>}
+                          {it.assignment_ids && (
+                            <div className="mt-1 flex flex-wrap gap-1">
+                              {String(it.assignment_ids).split(',').map((id) => (
+                                <span key={id} className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-800">#{String(id).trim()}</span>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
               )}

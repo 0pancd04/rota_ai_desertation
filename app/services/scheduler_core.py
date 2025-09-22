@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, date, time as dtime
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Any
 import logging
 import re
 
@@ -275,6 +275,9 @@ class SchedulerCore:
         created_count = 0
         # Collect reasons for patients we fail to assign today
         patient_reasons: Dict[str, set[str]] = {}
+        # Track detailed attempt diagnostics per patient/employee for richer unassigned context
+        patient_attempts: Dict[str, List[Dict[str, Any]]] = {}
+        employee_attempts: Dict[str, List[Dict[str, Any]]] = {}
 
         # Track how many meal-prep visits each patient has received today
         meal_visits_done: Dict[str, int] = {}
@@ -421,6 +424,22 @@ class SchedulerCore:
                             patient_reasons[chosen_patient.PatientID] = s
                         for v in violations:
                             s.add(v)
+                    except Exception:
+                        pass
+                    # Record this failed attempt for richer diagnostics (who/when/why)
+                    try:
+                        attempt_rec: Dict[str, Any] = {
+                            "employee_id": employee.EmployeeID,
+                            "employee_name": getattr(employee, 'Name', employee.EmployeeID),
+                            "patient_id": chosen_patient.PatientID,
+                            "patient_name": getattr(chosen_patient, 'PatientName', chosen_patient.PatientID),
+                            "service_type": inferred_enum.value if hasattr(inferred_enum, 'value') else str(inferred_enum),
+                            "start_time": start_iso,
+                            "end_time": end_iso,
+                            "violations": list(violations),
+                        }
+                        patient_attempts.setdefault(chosen_patient.PatientID, []).append(attempt_rec)
+                        employee_attempts.setdefault(employee.EmployeeID, []).append(attempt_rec)
                     except Exception:
                         pass
                     # Try next candidate patient if possible
@@ -576,6 +595,53 @@ class SchedulerCore:
                 todays_rows = self.db_manager.get_employee_assignments_for_date(employee.EmployeeID, day_date.isoformat())
                 if (todays_rows is None) or (len(todays_rows) == 0):
                     emp_reasons = self._diagnose_employee_unassigned(employee, day_date, patient_daily_minutes)
+                    # Build attempts for this employee against top candidate patients
+                    attempts_e: List[Dict[str, Any]] = []
+                    try:
+                        earliest, latest = self._parse_shift(employee)
+                        shift_start = datetime.combine(day_date, earliest)
+                        # rank patients with demand by travel time
+                        ranked_patients: List[Tuple[int, Patient]] = []
+                        for p in self.data_processor.patients:
+                            if patient_daily_minutes.get(p.PatientID, 0) <= 0:
+                                continue
+                            if not self._employee_can_serve(employee, p):
+                                continue
+                            ranked_patients.append((self._calc_travel_minutes(employee, p), p))
+                        ranked_patients.sort(key=lambda x: x[0])
+                        for tmin, p in ranked_patients[:5]:
+                            try:
+                                inferred_str = self._infer_service_type(p)
+                                try:
+                                    inferred_enum = ServiceType(inferred_str)
+                                except Exception:
+                                    inferred_enum = ServiceType.PERSONAL_CARE
+                                start_iso = (shift_start + timedelta(minutes=int(tmin))).replace(second=0, microsecond=0).isoformat()
+                                default_minutes = self.data_processor.get_default_service_duration(inferred_enum)
+                                end_iso = (datetime.fromisoformat(start_iso) + timedelta(minutes=int(default_minutes))).replace(second=0, microsecond=0).isoformat()
+                                violations = self.validator.validate_with_details(
+                                    employee_id=employee.EmployeeID,
+                                    patient_id=p.PatientID,
+                                    service_type=inferred_enum,
+                                    start_iso=start_iso,
+                                    end_iso=end_iso,
+                                    duration_minutes=int(default_minutes),
+                                    allow_same_day_dup_for_meal_prep=(inferred_enum == ServiceType.MEAL_PREP),
+                                )
+                                attempts_e.append({
+                                    "employee_id": employee.EmployeeID,
+                                    "employee_name": getattr(employee, 'Name', employee.EmployeeID),
+                                    "patient_id": p.PatientID,
+                                    "patient_name": getattr(p, 'PatientName', p.PatientID),
+                                    "service_type": inferred_enum.value,
+                                    "start_time": start_iso,
+                                    "end_time": end_iso,
+                                    "violations": violations,
+                                })
+                            except Exception:
+                                continue
+                    except Exception:
+                        pass
                     ctx = {
                         "role_level": getattr(employee, 'RoleLevel', None),
                         "qualification": getattr(employee, 'Qualification', None).value if getattr(employee, 'Qualification', None) else None,
@@ -584,6 +650,7 @@ class SchedulerCore:
                         "earliest_start": getattr(employee, 'EarliestStart', None),
                         "latest_end": getattr(employee, 'LatestEnd', None),
                         "issues": self._build_employee_issues(employee.EmployeeID, day_date.isoformat(), emp_reasons),
+                        "attempts": attempts_e,
                     }
                     self.db_manager.log_unassigned('employee', employee.EmployeeID, day_date.isoformat(), emp_reasons or ["No feasible assignments found"], ctx)
             except Exception:
@@ -604,6 +671,50 @@ class SchedulerCore:
                     reason_set = set(base_reasons)
                     for r in extra:
                         reason_set.add(r)
+                    # Build attempts for this patient against top candidate employees
+                    attempts_p: List[Dict[str, Any]] = []
+                    try:
+                        ranked_emps: List[Tuple[int, Employee]] = []
+                        for emp in self.data_processor.employees:
+                            if not self._employee_can_serve(emp, patient):
+                                continue
+                            ranked_emps.append((self._calc_travel_minutes(emp, patient), emp))
+                        ranked_emps.sort(key=lambda x: x[0])
+                        for tmin, emp in ranked_emps[:5]:
+                            try:
+                                earliest, latest = self._parse_shift(emp)
+                                start_dt = datetime.combine(day_date, earliest) + timedelta(minutes=int(tmin))
+                                inferred_str = self._infer_service_type(patient)
+                                try:
+                                    inferred_enum = ServiceType(inferred_str)
+                                except Exception:
+                                    inferred_enum = ServiceType.PERSONAL_CARE
+                                default_minutes = self.data_processor.get_default_service_duration(inferred_enum)
+                                start_iso = start_dt.replace(second=0, microsecond=0).isoformat()
+                                end_iso = (start_dt + timedelta(minutes=int(default_minutes))).replace(second=0, microsecond=0).isoformat()
+                                violations = self.validator.validate_with_details(
+                                    employee_id=emp.EmployeeID,
+                                    patient_id=patient.PatientID,
+                                    service_type=inferred_enum,
+                                    start_iso=start_iso,
+                                    end_iso=end_iso,
+                                    duration_minutes=int(default_minutes),
+                                    allow_same_day_dup_for_meal_prep=(inferred_enum == ServiceType.MEAL_PREP),
+                                )
+                                attempts_p.append({
+                                    "employee_id": emp.EmployeeID,
+                                    "employee_name": getattr(emp, 'Name', emp.EmployeeID),
+                                    "patient_id": patient.PatientID,
+                                    "patient_name": getattr(patient, 'PatientName', patient.PatientID),
+                                    "service_type": inferred_enum.value,
+                                    "start_time": start_iso,
+                                    "end_time": end_iso,
+                                    "violations": violations,
+                                })
+                            except Exception:
+                                continue
+                    except Exception:
+                        pass
                     # Build richer context with inline issues for verification
                     ctx = {
                         "required_support": getattr(patient, 'RequiredSupport', None),
@@ -615,7 +726,8 @@ class SchedulerCore:
                         "days_of_support": getattr(patient, 'DaysOfSupport', None),
                         "sat_sun_support": getattr(patient, 'SatSunSupport', None),
                         # Inline verification artifacts: show overlapping rows and reasons
-                        "issues": self._build_patient_issues(patient.PatientID, day_date.isoformat(), reason_set)
+                        "issues": self._build_patient_issues(patient.PatientID, day_date.isoformat(), reason_set),
+                        "attempts": attempts_p,
                     }
                     self.db_manager.log_unassigned('patient', patient.PatientID, day_date.isoformat(), list(reason_set) or ["No feasible employee/time window found"], ctx)
         except Exception:

@@ -248,12 +248,15 @@ export default function Timeline() {
                                      onClick={() => onCardClick(r)}>
                                   <div className="text-sm font-medium text-gray-900 truncate" title={r.patient_name}>{r.patient_name}</div>
                                   <div className="text-xs text-gray-600 flex items-center justify-between">
-                                    <span>{(r.service_type || '').replace('_',' ')}</span>
+                                    <span>{(r.service_type || '').replace(/_/g,' ')}</span>
                                     <span>{(r.start_time||'').slice(11,16)}–{(r.end_time||'').slice(11,16)}</span>
                                   </div>
                                   {r.assignment_reason && (
                                     <div className="text-[11px] text-gray-500 truncate" title={r.assignment_reason}>{r.assignment_reason}</div>
                                   )}
+                                  <div className="mt-1 text-[11px] text-gray-500 truncate">
+                                    Pref: {r.preference_of_carer || '-'} | RCS: {r.required_carer_support || '-'}
+                                  </div>
                                 </div>
                               ))}
                             </div>
@@ -318,7 +321,7 @@ export default function Timeline() {
                                      onClick={() => onCardClick(r)}>
                                   <div className="text-sm font-medium text-gray-900 truncate" title={r.employee_name}>{r.employee_name}</div>
                                   <div className="text-xs text-gray-600 flex items-center justify-between">
-                                    <span>{(r.service_type || '').replace('_',' ')}</span>
+                                    <span>{(r.service_type || '').replace(/_/g,' ')}</span>
                                     <span>{(r.start_time||'').slice(11,16)}–{(r.end_time||'').slice(11,16)}</span>
                                   </div>
                                   {r.assignment_reason && (
