@@ -1148,13 +1148,6 @@ class DatabaseManager:
                     for k, v in incoming_ctx.items():
                         if k not in existing_ctx and not isinstance(v, list):
                             existing_ctx[k] = v
-                    # Merge lists by de-duplicating
-                    def _merge_list(key: str, uniq_key_getter):
-                        inc = incoming_ctx.get(key) or []
-                        if not isinstance(inc, list):
-                            return
-                        ex = existing_ctx.get(key) or []
-                        existing_ctx[key] = _dedupe_objects(ex + inc, uniq_key_getter)
                     def _dedupe_objects(items: List[Dict[str, Any]], key_fn):
                         seen_keys = set()
                         out = []
@@ -1169,6 +1162,13 @@ class DatabaseManager:
                             seen_keys.add(key_tuple)
                             out.append(it)
                         return out
+                    # Merge lists by de-duplicating
+                    def _merge_list(key: str, uniq_key_getter):
+                        inc = incoming_ctx.get(key) or []
+                        if not isinstance(inc, list):
+                            return
+                        ex = existing_ctx.get(key) or []
+                        existing_ctx[key] = _dedupe_objects(ex + inc, uniq_key_getter)
                     _merge_list('issues', lambda d: (d.get('type'), d.get('assignment_ids'), d.get('details')))
                     _merge_list('attempts', lambda d: (
                         d.get('employee_id'), d.get('patient_id'), d.get('service_type'), d.get('start_time'), d.get('end_time'),
@@ -1218,12 +1218,6 @@ class DatabaseManager:
                     for k, v in incoming_ctx.items():
                         if k not in existing_ctx and not isinstance(v, list):
                             existing_ctx[k] = v
-                    def _merge_list(key: str, uniq_key_getter):
-                        inc = incoming_ctx.get(key) or []
-                        if not isinstance(inc, list):
-                            return
-                        ex = existing_ctx.get(key) or []
-                        existing_ctx[key] = _dedupe_objects(ex + inc, uniq_key_getter)
                     def _dedupe_objects(items: List[Dict[str, Any]], key_fn):
                         seen_keys = set()
                         out = []
@@ -1238,6 +1232,12 @@ class DatabaseManager:
                             seen_keys.add(key_tuple)
                             out.append(it)
                         return out
+                    def _merge_list(key: str, uniq_key_getter):
+                        inc = incoming_ctx.get(key) or []
+                        if not isinstance(inc, list):
+                            return
+                        ex = existing_ctx.get(key) or []
+                        existing_ctx[key] = _dedupe_objects(ex + inc, uniq_key_getter)
                     _merge_list('issues', lambda d: (d.get('type'), d.get('assignment_ids'), d.get('details')))
                     _merge_list('attempts', lambda d: (
                         d.get('employee_id'), d.get('patient_id'), d.get('service_type'), d.get('start_time'), d.get('end_time'),

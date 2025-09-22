@@ -35,6 +35,7 @@ export default function Unassigned() {
   const [error, setError] = useState(null);
   const [hoverSummary, setHoverSummary] = useState({ key: null, text: '', loading: false, error: null });
   const [cellDetail, setCellDetail] = useState(null); // { entityType, entityId, date, reasons, context }
+  const [expandedGroups, setExpandedGroups] = useState({}); // key -> boolean for attempts grouping
   const [entityDetail, setEntityDetail] = useState(null); // { entityType, entityId, data }
   const [entityNames, setEntityNames] = useState(new Map()); // entityId -> display name
   const [headerSummary, setHeaderSummary] = useState(null); // { entityType, entityId, weekStart, weekEnd, text, loading, error }
@@ -314,43 +315,87 @@ export default function Unassigned() {
               )}
               {Array.isArray(cellDetail.context?.attempts) && cellDetail.context.attempts.length > 0 && (
                 <div className="overflow-x-auto">
-                  <div className="text-sm font-medium text-gray-800 mb-1">Attempts</div>
-                  <table className="min-w-full text-sm text-left border border-gray-200 rounded-md overflow-hidden">
-                    <thead className="bg-gray-50 text-gray-700">
-                      <tr>
-                        <th className="px-3 py-2 border-b">{cellDetail.entityType === 'patients' ? 'Employee' : 'Patient'}</th>
-                        <th className="px-3 py-2 border-b">Service</th>
-                        <th className="px-3 py-2 border-b">Time</th>
-                        <th className="px-3 py-2 border-b">Violations</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {cellDetail.context.attempts.slice(0, 50).map((att, idx) => {
-                        const counterpart = cellDetail.entityType === 'patients'
-                          ? (att.employee_name || att.employee_id)
-                          : (att.patient_name || att.patient_id);
-                        const timeStr = `${att.start_time || ''} \u2192 ${att.end_time || ''}`;
-                        const viols = Array.isArray(att.violations) ? att.violations : [];
-                        return (
-                          <tr key={idx} className="odd:bg-white even:bg-gray-50 text-gray-800">
-                            <td className="px-3 py-2 border-b align-top">
-                              <div className="font-medium">{counterpart || '-'}</div>
-                              <div className="text-xs text-gray-500">{cellDetail.entityType === 'patients' ? (att.employee_id || '') : (att.patient_id || '')}</div>
-                            </td>
-                            <td className="px-3 py-2 border-b align-top">{(att.service_type || '').toString().replace('_',' ')}</td>
-                            <td className="px-3 py-2 border-b align-top whitespace-nowrap">{timeStr}</td>
-                            <td className="px-3 py-2 border-b align-top">
-                              <ul className="list-disc list-inside space-y-1">
-                                {viols.map((v, i2) => (
-                                  <li key={i2}>{String(v)}</li>
-                                ))}
-                              </ul>
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
+                  {(() => {
+                    const attempts = Array.isArray(cellDetail.context?.attempts) ? cellDetail.context.attempts : [];
+                    const byCounterpart = new Map();
+                    const isPatientView = cellDetail.entityType === 'patients';
+                    const idKey = isPatientView ? 'employee_id' : 'patient_id';
+                    const nameKey = isPatientView ? 'employee_name' : 'patient_name';
+                    for (const att of attempts) {
+                      const cid = att?.[idKey] || 'unknown';
+                      const cname = att?.[nameKey] || cid;
+                      if (!byCounterpart.has(cid)) {
+                        byCounterpart.set(cid, { id: cid, name: cname, attempts: [], reasons: new Set() });
+                      }
+                      const g = byCounterpart.get(cid);
+                      g.attempts.push(att);
+                      const viols = Array.isArray(att.violations) ? att.violations : [];
+                      viols.forEach(v => g.reasons.add(String(v)));
+                    }
+                    const groups = Array.from(byCounterpart.values());
+                    const counterpartLabel = isPatientView ? 'employees' : 'patients';
+                    return (
+                      <div>
+                        <div className="text-sm font-medium text-gray-800 mb-1">Attempts — tried against {groups.length} {counterpartLabel}</div>
+                        <div className="space-y-2">
+                          {groups.map((g) => {
+                            const groupKey = `${idKey}:${g.id}`;
+                            const expanded = !!expandedGroups[groupKey];
+                            return (
+                              <div key={groupKey} className="border border-gray-200 rounded">
+                                <button className="w-full flex items-center justify-between px-3 py-2 text-left hover:bg-gray-50" onClick={() => setExpandedGroups(prev => ({ ...prev, [groupKey]: !expanded }))}>
+                                  <div>
+                                    <div className="font-medium text-gray-900">{g.name}</div>
+                                    <div className="text-xs text-gray-500">ID: {g.id}</div>
+                                  </div>
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-xs text-gray-600 bg-gray-100 rounded px-2 py-0.5">{g.attempts.length} attempt{g.attempts.length !== 1 ? 's' : ''}</span>
+                                    <span className="text-xs text-gray-600 bg-gray-100 rounded px-2 py-0.5">{g.reasons.size} reason{g.reasons.size !== 1 ? 's' : ''}</span>
+                                    <span className="text-gray-500">{expanded ? '▾' : '▸'}</span>
+                                  </div>
+                                </button>
+                                {expanded && (
+                                  <div className="px-3 pb-3">
+                                    <div className="text-sm font-medium text-gray-800 mb-1">Reasons</div>
+                                    <ul className="list-disc list-inside text-sm text-gray-700 mb-2">
+                                      {Array.from(g.reasons).map((r, idx) => (<li key={idx}>{r}</li>))}
+                                    </ul>
+                                    <div className="text-sm font-medium text-gray-800 mb-1">Details</div>
+                                    <table className="min-w-full text-sm text-left border border-gray-200 rounded-md overflow-hidden">
+                                      <thead className="bg-gray-50 text-gray-700">
+                                        <tr>
+                                          <th className="px-3 py-2 border-b">Service</th>
+                                          <th className="px-3 py-2 border-b">Time</th>
+                                          <th className="px-3 py-2 border-b">Violations</th>
+                                        </tr>
+                                      </thead>
+                                      <tbody>
+                                        {g.attempts.slice(0, 50).map((att, idx2) => {
+                                          const timeStr = `${att.start_time || ''} \u2192 ${att.end_time || ''}`;
+                                          const viols = Array.isArray(att.violations) ? att.violations : [];
+                                          return (
+                                            <tr key={idx2} className="odd:bg-white even:bg-gray-50 text-gray-800">
+                                              <td className="px-3 py-2 border-b align-top">{(att.service_type || '').toString().replace('_',' ')}</td>
+                                              <td className="px-3 py-2 border-b align-top whitespace-nowrap">{timeStr}</td>
+                                              <td className="px-3 py-2 border-b align-top">
+                                                <ul className="list-disc list-inside space-y-1">
+                                                  {viols.map((v, i2) => (<li key={i2}>{String(v)}</li>))}
+                                                </ul>
+                                              </td>
+                                            </tr>
+                                          );
+                                        })}
+                                      </tbody>
+                                    </table>
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    );
+                  })()}
                 </div>
               )}
               {Array.isArray(cellDetail.context?.issues) && cellDetail.context.issues.length > 0 && (

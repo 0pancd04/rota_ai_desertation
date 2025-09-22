@@ -1152,11 +1152,11 @@ class SchedulerCore:
 
 
 
-    def run_post_generation_diagnostics(self, week_start_iso: str, week_end_iso: str, top_k: int = 5) -> Dict[str, int]:
+    def run_post_generation_diagnostics(self, week_start_iso: str, week_end_iso: str, top_k: Optional[int] = None) -> Dict[str, int]:
         """Enrich unassigned rows after weekly rota generation.
 
         For each unassigned patient/employee in the given week range:
-        - Sample top_k counterpart candidates ranked by travel time
+        - Loop through counterpart candidates ranked by travel time (all by default)
         - Run validate_with_details for a representative timeslot in shift
         - Append attempts and compact issues/suggestions context via log_unassigned
 
@@ -1174,22 +1174,20 @@ class SchedulerCore:
                     pat = self.data_processor.get_patient_by_id(pid)
                     if not pat:
                         continue
-                    ctx = row.get('context') or {}
-                    # If attempts already present, skip heavy recompute
-                    if isinstance(ctx.get('attempts'), list) and len(ctx.get('attempts')) > 0:
-                        continue
-                    # Rank employees by travel time regardless of eligibility to expose why rules fail
+                    # Always recompute full attempts set across all employees for this patient
+                    # Rank employees by travel time regardless of eligibility; fallback to 0 on travel failure
                     ranked: List[Tuple[int, Employee]] = []
-                    try:
-                        for emp in self.data_processor.employees:
+                    for emp in self.data_processor.employees:
+                        try:
                             tmin = self._calc_travel_minutes(emp, pat)
-                            ranked.append((tmin, emp))
-                        ranked.sort(key=lambda x: x[0])
-                    except Exception:
-                        ranked = []
+                        except Exception:
+                            tmin = 0
+                        ranked.append((int(tmin) if isinstance(tmin, int) else 0, emp))
+                    ranked.sort(key=lambda x: x[0])
                     attempts_p: List[Dict[str, Any]] = []
                     potentials: List[Dict[str, Any]] = []
-                    for tmin, emp in ranked[:max(1, int(top_k))]:
+                    subset = ranked if (top_k is None) else ranked[:max(1, int(top_k))]
+                    for tmin, emp in subset:
                         try:
                             earliest, _latest = self._parse_shift(emp)
                             # Representative window: shift start + travel, default duration for inferred service
@@ -1253,20 +1251,19 @@ class SchedulerCore:
                     emp = self.data_processor.get_employee_by_id(eid)
                     if not emp:
                         continue
-                    ctx = row.get('context') or {}
-                    if isinstance(ctx.get('attempts'), list) and len(ctx.get('attempts')) > 0:
-                        continue
+                    # Always recompute full attempts set across all patients for this employee; travel fallback 0
                     ranked: List[Tuple[int, Patient]] = []
-                    try:
-                        for pat in self.data_processor.patients:
+                    for pat in self.data_processor.patients:
+                        try:
                             tmin = self._calc_travel_minutes(emp, pat)
-                            ranked.append((tmin, pat))
-                        ranked.sort(key=lambda x: x[0])
-                    except Exception:
-                        ranked = []
+                        except Exception:
+                            tmin = 0
+                        ranked.append((int(tmin) if isinstance(tmin, int) else 0, pat))
+                    ranked.sort(key=lambda x: x[0])
                     attempts_e: List[Dict[str, Any]] = []
                     potentials: List[Dict[str, Any]] = []
-                    for tmin, pat in ranked[:max(1, int(top_k))]:
+                    subset = ranked if (top_k is None) else ranked[:max(1, int(top_k))]
+                    for tmin, pat in subset:
                         try:
                             earliest, _latest = self._parse_shift(emp)
                             inferred_str = self._infer_service_type(pat)

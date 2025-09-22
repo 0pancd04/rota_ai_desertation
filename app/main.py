@@ -105,6 +105,16 @@ class UnassignedCommonIssuesRequest(BaseModel):
     week_end: str
     top_n: int | None = 5
 
+class UnassignedDebugPatientRequest(BaseModel):
+    patient_id: str
+    date: str | None = None  # ISO date (YYYY-MM-DD). Defaults to today
+    duration_minutes: int | None = None  # Defaults to inferred service duration
+
+class UnassignedDebugEmployeeRequest(BaseModel):
+    employee_id: str
+    date: str | None = None  # ISO date (YYYY-MM-DD). Defaults to today
+    duration_minutes: int | None = None  # Defaults to inferred service duration per patient
+
 @app.get("/")
 async def root():
     return {"message": "AI Rota System for Healthcare is running - Development Mode Active!"}
@@ -828,6 +838,137 @@ async def summarize_common_unassigned_issues(req: UnassignedCommonIssuesRequest)
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error summarizing common issues: {e}")
+
+@app.post("/debug/unassigned/patient")
+async def debug_unassigned_patient(req: UnassignedDebugPatientRequest):
+    """Evaluate all employees for a given patient/date, listing validation failures per employee.
+
+    This uses shift-start-based windows and does NOT use travel service.
+    """
+    try:
+        pat = data_processor.get_patient_by_id(req.patient_id)
+        if not pat:
+            raise HTTPException(status_code=404, detail="Patient not found")
+        from datetime import datetime, date as dtdate, time as dtime, timedelta
+        day = datetime.fromisoformat((req.date or dtdate.today().isoformat())).date()
+        # Infer service and duration
+        inferred_str = rota_service.scheduler_core._infer_service_type(pat)
+        from .models.schemas import ServiceType
+        try:
+            svc = ServiceType(inferred_str)
+        except Exception:
+            svc = ServiceType.PERSONAL_CARE
+        default_minutes = data_processor.get_default_service_duration(svc)
+        duration = int(req.duration_minutes or default_minutes or 30)
+        results = []
+        eligible_count = 0
+        for emp in data_processor.employees:
+            try:
+                e_start, _ = rota_service.scheduler_core._parse_shift(emp)
+            except Exception:
+                e_start = dtime(9, 0)
+            start_dt = datetime.combine(day, e_start)
+            start_iso = start_dt.replace(second=0, microsecond=0).isoformat()
+            end_iso = (start_dt + timedelta(minutes=duration)).replace(second=0, microsecond=0).isoformat()
+            viols = rota_service.validator.validate_with_details(
+                employee_id=emp.EmployeeID,
+                patient_id=pat.PatientID,
+                service_type=svc,
+                start_iso=start_iso,
+                end_iso=end_iso,
+                duration_minutes=duration,
+                allow_same_day_dup_for_meal_prep=(svc == ServiceType.MEAL_PREP),
+            )
+            eligible = len(viols) == 0
+            if eligible:
+                eligible_count += 1
+            results.append({
+                "employee_id": emp.EmployeeID,
+                "employee_name": getattr(emp, 'Name', emp.EmployeeID),
+                "start_time": start_iso,
+                "end_time": end_iso,
+                "violations": viols,
+                "eligible": eligible,
+            })
+        return {
+            "patient_id": pat.PatientID,
+            "date": day.isoformat(),
+            "service_type": svc.value,
+            "duration_minutes": duration,
+            "eligible_employees": eligible_count,
+            "total_employees": len(data_processor.employees),
+            "attempts": results,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Debug patient evaluation failed: {e}")
+
+@app.post("/debug/unassigned/employee")
+async def debug_unassigned_employee(req: UnassignedDebugEmployeeRequest):
+    """Evaluate all patients for a given employee/date, listing validation failures per patient.
+
+    This uses shift-start-based windows and does NOT use travel service.
+    """
+    try:
+        emp = data_processor.get_employee_by_id(req.employee_id)
+        if not emp:
+            raise HTTPException(status_code=404, detail="Employee not found")
+        from datetime import datetime, date as dtdate, time as dtime, timedelta
+        day = datetime.fromisoformat((req.date or dtdate.today().isoformat())).date()
+        try:
+            e_start, _ = rota_service.scheduler_core._parse_shift(emp)
+        except Exception:
+            e_start = dtime(9, 0)
+        start_base = datetime.combine(day, e_start)
+        results = []
+        eligible_count = 0
+        from .models.schemas import ServiceType
+        for pat in data_processor.patients:
+            try:
+                inferred_str = rota_service.scheduler_core._infer_service_type(pat)
+                try:
+                    svc = ServiceType(inferred_str)
+                except Exception:
+                    svc = ServiceType.PERSONAL_CARE
+                default_minutes = data_processor.get_default_service_duration(svc)
+                duration = int(req.duration_minutes or default_minutes or 30)
+                start_iso = start_base.replace(second=0, microsecond=0).isoformat()
+                end_iso = (start_base + timedelta(minutes=duration)).replace(second=0, microsecond=0).isoformat()
+                viols = rota_service.validator.validate_with_details(
+                    employee_id=emp.EmployeeID,
+                    patient_id=pat.PatientID,
+                    service_type=svc,
+                    start_iso=start_iso,
+                    end_iso=end_iso,
+                    duration_minutes=duration,
+                    allow_same_day_dup_for_meal_prep=(svc == ServiceType.MEAL_PREP),
+                )
+                eligible = len(viols) == 0
+                if eligible:
+                    eligible_count += 1
+                results.append({
+                    "patient_id": pat.PatientID,
+                    "patient_name": getattr(pat, 'PatientName', pat.PatientID),
+                    "service_type": svc.value,
+                    "start_time": start_iso,
+                    "end_time": end_iso,
+                    "violations": viols,
+                    "eligible": eligible,
+                })
+            except Exception:
+                continue
+        return {
+            "employee_id": emp.EmployeeID,
+            "date": day.isoformat(),
+            "eligible_patients": eligible_count,
+            "total_patients": len(data_processor.patients),
+            "attempts": results,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Debug employee evaluation failed: {e}")
 
 class UnassignedBulkSummarizeRequest(BaseModel):
     entity_type: str  # 'patient' | 'employee'
