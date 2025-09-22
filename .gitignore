@@ -173,3 +173,5 @@ ehthumbs.db
 Thumbs.db
 
 *.md
+*.pdf
+*.docx
